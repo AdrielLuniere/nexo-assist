@@ -13,7 +13,11 @@ import type { Express } from 'express';
 import { type HttpTarget, request } from './http.js';
 import { afterAll, afterEach, vi } from 'vitest';
 import { createAuthService } from '../../apps/api/src/auth/auth-service.js';
-import { createInMemoryConversationRepository } from '../../apps/api/src/conversations/conversation-repository.js';
+import { createInMemoryConsoleRepository } from '../../apps/api/src/console/console-repository.js';
+import { createConsoleService } from '../../apps/api/src/console/console-service.js';
+import { createConversationEventBus } from '../../apps/api/src/conversations/conversation-events.js';
+import { createHandoffRequestService, createInMemoryHandoffRequestRepository } from '../../apps/api/src/conversations/handoff-request.js';
+import { createInMemoryConversationRepository, createInMemoryWorld } from '../../apps/api/src/conversations/conversation-repository.js';
 import { createConversationService } from '../../apps/api/src/conversations/conversation-service.js';
 import type { AgentResponder } from '../../apps/api/src/conversations/responder.js';
 import { createInMemoryUserRepository } from '../../apps/api/src/auth/user-repository.js';
@@ -29,7 +33,9 @@ export const ANA: User = { id: 'usr_ana', email: 'ana.souza@nexo.com.br', name: 
 export const BRUNO: User = { id: 'usr_bruno', email: 'bruno.lima@nexo.com.br', name: 'Bruno Lima', role: 'EMPLOYEE', analystLevel: null, department: 'Comercial' };
 export const MARCOS: User = { id: 'usr_marcos', email: 'marcos.oliveira@nexo.com.br', name: 'Marcos Oliveira', role: 'ANALYST', analystLevel: 'N1', department: 'Service Desk de TI' };
 export const PAULA: User = { id: 'usr_paula', email: 'paula.santos@nexo.com.br', name: 'Paula Santos', role: 'ANALYST', analystLevel: 'N2', department: 'Service Desk de TI' };
-export const USERS = [ANA, BRUNO, MARCOS, PAULA];
+/** Dado inconsistente: analista sem nível N1/N2. O console não deve aceitá-lo. */
+export const LUCAS: User = { id: 'usr_lucas', email: 'lucas.pereira@nexo.com.br', name: 'Lucas Pereira', role: 'ANALYST', analystLevel: null, department: 'Service Desk de TI' };
+export const USERS = [ANA, BRUNO, MARCOS, PAULA, LUCAS];
 
 export const CONV_ANA = 'conv_ana';
 export const CONV_BRUNO = 'conv_bruno';
@@ -92,6 +98,8 @@ export interface HarnessOptions {
   readonly sessionTtlSeconds?: number;
   readonly responder?: AgentResponder;
   readonly messageLimit?: number;
+  /** Parâmetros do stream de eventos (tempo do keep-alive e limite de conexões por funcionário). */
+  readonly eventStreams?: { readonly maxPerUser?: number; readonly heartbeatMs?: number };
 }
 
 export async function buildHarness(options: HarnessOptions = {}) {
@@ -107,7 +115,10 @@ export async function buildHarness(options: HarnessOptions = {}) {
   if (options.retry !== false) tickets = withRetry(tickets, { sleep: () => Promise.resolve() });
   if (options.ticketServiceOverride) tickets = options.ticketServiceOverride(tickets);
 
-  const conversations = createInMemoryConversationRepository();
+  const world = createInMemoryWorld();
+  const conversations = createInMemoryConversationRepository(world);
+  const events = createConversationEventBus();
+  const consoleService = createConsoleService({ console: createInMemoryConsoleRepository(world, USERS), conversations, tickets, events, now });
   const users = createInMemoryUserRepository(USERS);
   const auth = createAuthService({ users, secret: SECRET, sessionTtlSeconds: options.sessionTtlSeconds ?? 3600, now });
   const logger = { error: vi.fn() };
@@ -122,6 +133,10 @@ export async function buildHarness(options: HarnessOptions = {}) {
       drafts: createDraftService({ drafts, tickets, now }),
       conversations: createConversationService({ conversations, now, ...(options.messageLimit ? { messageLimit: options.messageLimit } : {}) }),
       ...(options.responder ? { responder: options.responder } : {}),
+      console: consoleService,
+      handoffs: createHandoffRequestService({ handoffs: createInMemoryHandoffRequestRepository(world), conversations, events, now }),
+      events,
+      ...(options.eventStreams ? { eventStreams: options.eventStreams } : {}),
     },
   });
 
@@ -133,6 +148,7 @@ export async function buildHarness(options: HarnessOptions = {}) {
     clock,
     drafts,
     conversations,
+    events,
     logger,
     /** Serviço sem retry nem simulação de queda, para consultar o estado real. */
     realTickets,

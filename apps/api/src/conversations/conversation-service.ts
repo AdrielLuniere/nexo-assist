@@ -36,6 +36,13 @@ export interface ResumeResult {
   readonly pending: Message | null;
 }
 
+/** Estado atual e mensagens de analista perdidas, para (re)conectar o stream de eventos. */
+export interface EventsSnapshot {
+  readonly status: ConversationStatus;
+  readonly version: number;
+  readonly missed: Message[];
+}
+
 export interface ConversationService {
   list(user: User): Promise<ConversationSummary[]>;
   start(user: User): Promise<{ conversation: ConversationDetail; created: boolean }>;
@@ -43,6 +50,12 @@ export interface ConversationService {
   sendMessage(user: User, conversationId: string, input: SendMessageRequest): Promise<SendMessageResult>;
   /** Localiza a resposta pendente do agente para retomar (`POST .../resume`). */
   resume(user: User, conversationId: string): Promise<ResumeResult>;
+  /**
+   * Estado atual da conversa e as mensagens de analista posteriores a `after` (ver
+   * `ConversationRepository.analystMessagesAfter`); com `after` nulo só o estado. 404 se a conversa
+   * não é do funcionário.
+   */
+  eventsSnapshot(user: User, conversationId: string, after: string | null): Promise<EventsSnapshot>;
 }
 
 export interface ConversationServiceDeps {
@@ -53,6 +66,9 @@ export interface ConversationServiceDeps {
 
 /** Teto de conversas devolvidas na listagem (a mais recente primeiro). */
 export const LIST_LIMIT = 100;
+
+/** Teto de mensagens recuperadas de uma vez na (re)conexão do stream de eventos. */
+export const EVENT_CATCH_UP_LIMIT = 100;
 
 const notFound = () => new AppError('NOT_FOUND', 'Conversa não encontrada.');
 
@@ -146,6 +162,17 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
       const record = await conversations.find(user.id, conversationId);
       if (!record) throw notFound();
       return { conversation: record, pending: await pendingOf(record) };
+    },
+
+    async eventsSnapshot(user, conversationId, after) {
+      const record = await conversations.find(user.id, conversationId);
+      if (!record) throw notFound();
+      // Sem ponto de partida não há o que recuperar: o cliente tem o histórico do GET da conversa.
+      const missed = after === null ? [] : await conversations.analystMessagesAfter(record.id, after, EVENT_CATCH_UP_LIMIT);
+      // O estado é lido depois das mensagens: se mudar entre as duas leituras, o evento ao vivo
+      // (já assinado pelo chamador) cobre a diferença e o cliente descarta o que já viu.
+      const current = (await conversations.find(user.id, conversationId)) ?? record;
+      return { status: current.status, version: current.version, missed };
     },
   };
 }

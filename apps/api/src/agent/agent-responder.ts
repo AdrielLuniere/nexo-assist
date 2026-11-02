@@ -142,7 +142,14 @@ export function createAgentResponder(deps: AgentResponderDeps): AgentResponder {
             return outcome;
           });
 
-          const published = await deps.store.publish({ employeeId: user.id, conversationId: conversation.id, triggerMessageId: message.id, result, now: now() });
+          const published = await deps.store.publish({
+            employeeId: user.id,
+            conversationId: conversation.id,
+            triggerMessageId: message.id,
+            expectedVersion: turn.version,
+            result,
+            now: now(),
+          });
           switch (published.kind) {
             case 'published':
             case 'already_published':
@@ -159,8 +166,8 @@ export function createAgentResponder(deps: AgentResponderDeps): AgentResponder {
               });
               return;
             case 'agent_paused':
-              // Transferida, assumida ou encerrada durante a execução: a resposta é descartada.
-              deps.logger.info('Resposta do agente descartada: conversa saiu do agente durante a execução', { ...context, status: published.status });
+              // Transferida, assumida, encerrada ou com qualquer outra mudança de estado durante a execução: a resposta é descartada.
+              deps.logger.info('Resposta do agente descartada: o estado da conversa mudou durante a execução', { ...context, status: published.status });
               channel.push({ event: 'conversation.status', data: { status: published.status, version: published.version } });
               return;
             case 'not_found':

@@ -7,7 +7,11 @@ import { createPrismaHelpCenter } from './agent/help-center.js';
 import { createAuthService } from './auth/auth-service.js';
 import { createPrismaUserRepository } from './auth/user-repository.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
+import { createPrismaConsoleRepository } from './console/console-repository.js';
+import { createConsoleService } from './console/console-service.js';
+import { createConversationEventBus } from './conversations/conversation-events.js';
 import { createPrismaConversationRepository } from './conversations/conversation-repository.js';
+import { createHandoffRequestService, createPrismaHandoffRequestRepository } from './conversations/handoff-request.js';
 import { createConversationService } from './conversations/conversation-service.js';
 import { createDraftService } from './drafts/draft-service.js';
 import { createPrismaDraftRepository } from './drafts/draft-repository.js';
@@ -57,6 +61,9 @@ function main(): void {
     logger,
   });
 
+  const conversations = createPrismaConversationRepository(prisma);
+  const events = createConversationEventBus();
+
   const app = createApp({
     checkDatabase: createDatabaseCheck(prisma, env.HEALTH_DB_TIMEOUT_MS),
     version: process.env.npm_package_version ?? '0.0.0-dev',
@@ -69,9 +76,12 @@ function main(): void {
         sessionTtlSeconds: env.AUTH_SESSION_TTL_MINUTES * 60,
       }),
       tickets,
-      conversations: createConversationService({ conversations: createPrismaConversationRepository(prisma) }),
+      conversations: createConversationService({ conversations }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(prisma), tickets }),
       responder,
+      console: createConsoleService({ console: createPrismaConsoleRepository(prisma), conversations, tickets, events }),
+      events,
+      handoffs: createHandoffRequestService({ handoffs: createPrismaHandoffRequestRepository(prisma), conversations, events }),
     },
   });
 
@@ -84,6 +94,9 @@ function main(): void {
     server.close(() => {
       void prisma.$disconnect().finally(() => process.exit(0));
     });
+    // Streams de eventos ficam abertos por tempo indeterminado e impediriam o encerramento.
+    events.shutdown();
+    server.closeIdleConnections();
     setTimeout(() => process.exit(1), 10_000).unref();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));

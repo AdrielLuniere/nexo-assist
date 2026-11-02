@@ -4,19 +4,21 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.5 (agente Mastra, ferramentas e explicabilidade).**
+> **Status: P0.6 (transferência e console do analista, sem interface).**
 >
 > | Implementado | Planejado |
 > | --- | --- |
-> | Monorepo, contratos, fronteiras entre pacotes, `GET /health` | Console do analista (`/api/console/*`): assumir, devolver, encerrar, responder |
-> | Migrations e seed de exemplo | Mensagens do analista em tempo real (`/events`) |
-> | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | Telas do protótipo (chat e console) |
-> | Persistência em PostgreSQL de chamados, conversas, mensagens, decisões, rascunhos e transferências | Rota para o funcionário pedir analista sem passar pelo agente |
-> | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | Deploy |
+> | Monorepo, contratos, fronteiras entre pacotes, `GET /health`, migrations e seed de exemplo | Telas do protótipo (chat e console) |
+> | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | |
+> | Persistência em PostgreSQL de chamados, conversas, mensagens, decisões, rascunhos e transferências | Deploy |
+> | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | |
 > | Conversas: criar, listar, histórico, enviar mensagem (SSE) com idempotência, limite de 30 e agente pausado | |
 > | **Agente Mastra** respondendo no stream: central de ajuda, chamados do funcionário, duplicidade, rascunhos (abrir, atualizar, reabrir) e transferência para analista | |
 > | **Decisão registrada por resposta**: intenção, entendimento, ação, confiança, justificativa, regras, ferramentas executadas, modelo, tokens e latência | |
 > | **Recuperação de resposta pendente** (`POST .../resume`) e publicação idempotente | |
+> | **Console do analista** (`/api/console/*`): fila de transferidas com filtros e busca, histórico com decisões do agente, chamados do funcionário, assumir, responder, devolver ao agente e encerrar, com concorrência segura | |
+> | **Pedido direto de analista** pelo funcionário (`POST .../handoff`), sem LLM, atômico e idempotente | |
+> | **Eventos em tempo real para o funcionário** (`GET .../events`): mensagens do analista e mudanças de estado, com recuperação na reconexão | |
 >
 > A lista completa de rotas, implementadas e planejadas, está em [docs/api-contracts.md](docs/api-contracts.md).
 
@@ -62,7 +64,7 @@ A página da web mostra se a API e o banco estão de pé.
 | --- | --- |
 | `npm run dev` | API (tsx watch) e web (Vite) juntas |
 | `npm test` | Testes unitários, de arquitetura e de API (sem banco). No Windows o worker do Vitest cai de vez em quando por um aborto nativo; se aparecer "Worker exited unexpectedly", rode de novo (detalhes em [docs/architecture.md](docs/architecture.md), seção Testes) |
-| `npm run test:db` | Integração com PostgreSQL real em banco descartável, criado e removido a cada execução (exige `npm run db:up`); inclui o agente de ponta a ponta com LLM simulado |
+| `npm run test:db` | Integração com PostgreSQL real em banco descartável, criado e removido a cada execução (exige `npm run db:up`); inclui o agente de ponta a ponta com LLM simulado e o console do analista (concorrência) |
 | `npm run test:live` | Avaliação com o modelo **real** (opcional, custa tokens): só roda com `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor |
 | `npm run db:migrate` | Aplica as migrations ao banco do `.env` |
 | `npm run db:seed -- --confirm` | Insere os dados de exemplo no banco do `.env` |
@@ -134,6 +136,24 @@ Custo controlado por resposta: até 6 chamadas ao modelo, 8 execuções de ferra
 saída por chamada, histórico das últimas 24 mensagens, 45 s de tempo máximo e no máximo 4 respostas
 simultâneas por processo (`AGENT_TIMEOUT_MS`, `AGENT_MAX_CONCURRENCY`).
 
+## Transferência e console do analista
+
+Quando o agente transfere (pedido do funcionário, caso crítico, chamado vencido a pedido ou confiança
+abaixo de 0,6), a conversa vai para `WAITING_ANALYST` com um resumo do caso e o agente para de
+responder. Pelas rotas `/api/console/*`, um analista N1 ou N2:
+
+1. vê a **fila** (filtros por status, busca por funcionário, paginação), com motivo e resumo;
+2. abre a conversa: histórico, **decisões do agente** e os chamados do funcionário atendido;
+3. **assume** (só um analista consegue, mesmo em disputa), **responde**, e **devolve** ao agente ou
+   **encerra**. Só quem assumiu responde, devolve ou encerra;
+4. o funcionário acompanha mensagens e mudanças de estado em `GET /api/conversations/:id/events`, que
+   se recupera sozinho depois de queda ou reinício.
+
+Toda ação informa a versão que o analista viu (`expectedVersion`) e roda com a conversa travada no
+banco; o agente também não publica se o estado da conversa mudou durante a execução. Os registros de
+transferência nunca são apagados. Regras, erros e limites: [docs/api-contracts.md](docs/api-contracts.md)
+e [docs/architecture.md](docs/architecture.md). Ainda não há interface do console: só a API.
+
 ## Ainda por escrever
 
-Principais trade-offs e o que faria com mais tempo (próximas fases), além do console do analista.
+Principais trade-offs e o que faria com mais tempo (próximas fases), além das telas.

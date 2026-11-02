@@ -17,7 +17,7 @@ describe('catálogo de rotas', () => {
     }
   });
 
-  it('lista exatamente as rotas implementadas até a P0.5', () => {
+  it('lista exatamente as rotas implementadas até a P0.6-A', () => {
     expect(
       routes
         .filter((route) => route.status === 'implemented')
@@ -33,6 +33,14 @@ describe('catálogo de rotas', () => {
         'GET /api/conversations/:conversationId',
         'POST /api/conversations/:conversationId/messages',
         'POST /api/conversations/:conversationId/resume',
+        'GET /api/conversations/:conversationId/events',
+        'POST /api/conversations/:conversationId/handoff',
+        'GET /api/console/conversations',
+        'GET /api/console/conversations/:conversationId',
+        'POST /api/console/conversations/:conversationId/assume',
+        'POST /api/console/conversations/:conversationId/return',
+        'POST /api/console/conversations/:conversationId/close',
+        'POST /api/console/conversations/:conversationId/messages',
         'GET /api/tickets',
         'GET /api/tickets/:ticketCode',
         'POST /api/conversations/:conversationId/drafts/:draftId/confirm',
@@ -41,14 +49,14 @@ describe('catálogo de rotas', () => {
     );
   });
 
-  it('nenhuma rota implementada exige papel de analista (console ainda é planejado)', () => {
-    expect(routes.filter((r) => r.status === 'implemented' && (r.auth as string) === 'analyst')).toEqual([]);
+  it('console exige papel de analista e nada fora dele o exige', () => {
+    for (const route of routes) {
+      expect(route.auth === 'analyst').toBe(route.path.startsWith('/api/console/'));
+    }
   });
 
-  it('console exige papel de analista', () => {
-    for (const route of routes.filter((r) => r.path.startsWith('/api/console/'))) {
-      expect(route.auth).toBe('analyst');
-    }
+  it('nenhuma rota está planejada', () => {
+    expect(routes.filter((r) => (r.status as string) === 'planned')).toEqual([]);
   });
 });
 

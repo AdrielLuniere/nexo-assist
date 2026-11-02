@@ -9,7 +9,7 @@ import { TicketDraftSchema } from '../domain/draft.js';
 import { ConversationStatusSchema } from '../domain/enums.js';
 import { HandoffSchema } from '../domain/handoff.js';
 import { TicketDetailSchema, TicketSummarySchema } from '../domain/ticket.js';
-import { UserSchema } from '../domain/user.js';
+import { IdSchema, UserSchema } from '../domain/user.js';
 import { ApiErrorBodySchema } from './errors.js';
 import { HealthResponseSchema } from './health.js';
 
@@ -82,6 +82,13 @@ export const ConversationEventSchema = z.discriminatedUnion('event', [
 ]);
 export type ConversationEvent = z.infer<typeof ConversationEventSchema>;
 
+/**
+ * Parâmetros de `GET /api/conversations/:id/events`. `after` é o id da última mensagem que o cliente
+ * já tem (do histórico carregado); na reconexão o cabeçalho `Last-Event-ID` (id da última
+ * `message.created` recebida) tem precedência.
+ */
+export const ConversationEventsQuerySchema = z.object({ after: IdSchema.optional() });
+
 export const DraftConfirmationResponseSchema = z.object({
   draft: TicketDraftSchema,
   ticket: TicketDetailSchema,
@@ -115,12 +122,15 @@ export const ConsoleConversationItemSchema = ConversationSummarySchema.extend({
   activeHandoff: HandoffSchema.nullable(),
 });
 
+export type ConsoleConversationItem = z.infer<typeof ConsoleConversationItemSchema>;
+
 export const ConsoleConversationDetailSchema = ConversationDetailSchema.extend({
   employee: UserSchema,
   handoffs: z.array(HandoffSchema),
   /** Painel com os chamados do funcionário (Tela 4). */
   employeeTickets: z.array(TicketSummarySchema),
 });
+export type ConsoleConversationDetail = z.infer<typeof ConsoleConversationDetailSchema>;
 
 /** Ações do console exigem a versão vista pelo analista (concorrência otimista). */
 export const ConsoleActionRequestSchema = z.object({
@@ -131,6 +141,7 @@ export const AnalystMessageRequestSchema = z.object({
   content: z.string().trim().min(1).max(4000),
   clientMessageId: z.uuid(),
 });
+export type AnalystMessageRequest = z.infer<typeof AnalystMessageRequestSchema>;
 
 // --- Catálogo de rotas ------------------------------------------------------
 
@@ -235,9 +246,11 @@ export const API_ROUTES = {
     method: 'GET',
     path: '/api/conversations/:conversationId/events',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'sse',
-    summary: 'Mensagens do analista e mudanças de estado (ConversationEvent).',
+    summary:
+      'Mensagens do analista e mudanças de estado (ConversationEvent). Ao conectar envia o estado atual e recupera as mensagens perdidas (Last-Event-ID ou ?after=).',
+    query: ConversationEventsQuerySchema,
   },
   confirmDraft: {
     method: 'POST',
@@ -261,7 +274,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/conversations/:conversationId/handoff',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Funcionário pede para falar com um analista.',
     body: RequestHandoffRequestSchema,
@@ -291,7 +304,7 @@ export const API_ROUTES = {
     method: 'GET',
     path: '/api/console/conversations',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Lista de conversas com filtros e status (Telas 4 e 5).',
     query: ConsoleConversationFilterSchema,
@@ -301,7 +314,7 @@ export const API_ROUTES = {
     method: 'GET',
     path: '/api/console/conversations/:conversationId',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Histórico, transferências e chamados do funcionário.',
     success: z.object({ conversation: ConsoleConversationDetailSchema }),
@@ -310,7 +323,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/console/conversations/:conversationId/assume',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Analista assume; agente pausado (WAITING_ANALYST → WITH_ANALYST).',
     body: ConsoleActionRequestSchema,
@@ -320,7 +333,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/console/conversations/:conversationId/return',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Devolve ao agente (WITH_ANALYST → WITH_AGENT).',
     body: ConsoleActionRequestSchema,
@@ -330,7 +343,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/console/conversations/:conversationId/close',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Encerra a conversa.',
     body: ConsoleActionRequestSchema,
@@ -340,7 +353,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/console/conversations/:conversationId/messages',
     auth: 'analyst',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Mensagem do analista (somente em WITH_ANALYST).',
     body: AnalystMessageRequestSchema,

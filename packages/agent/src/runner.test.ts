@@ -357,6 +357,12 @@ describe('transferência, escopo e confiança', () => {
   });
 });
 
+/**
+ * A retentativa do SDK espera de verdade (backoff, ~1 s numa máquina livre). Em CI carregado um desses
+ * testes passou de 7 s e estourou o limite padrão de 5 s, sem relação com a lógica testada.
+ */
+const RETRY_TEST_TIMEOUT_MS = 30_000;
+
 describe('falhas e limites', () => {
   const providerDown = () => ({ fail: Object.assign(new Error('503 Service Unavailable'), { statusCode: 503 }) });
 
@@ -367,13 +373,13 @@ describe('falhas e limites', () => {
     expect(calls).toHaveLength(2);
     expect(result).toBeUndefined();
     expect(steps).toEqual([]);
-  });
+  }, RETRY_TEST_TIMEOUT_MS);
 
   it('falha passageira do provedor é absorvida pela retentativa', async () => {
     const { error, result } = await run([providerDown(), submit(proposal({ reply: 'Respondido na segunda tentativa.' }))]);
     expect(error).toBeUndefined();
     expect(result?.reply.text).toBe('Respondido na segunda tentativa.');
-  });
+  }, RETRY_TEST_TIMEOUT_MS);
 
   it('modelo que termina sem submitResponse: resposta inválida, nada é publicado', async () => {
     const { error } = await run([{ text: 'Olá! Como posso ajudar?' }]);

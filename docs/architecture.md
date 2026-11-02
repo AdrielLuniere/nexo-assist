@@ -59,7 +59,8 @@ schema, sem conexão com o banco). Ela é aplicada com `npm run db:migrate`, sem
 explícita de quem roda; nada a aplica automaticamente.
 
 Concorrência no console (assumir, devolver, encerrar) usa `conversations.version`
-(concorrência otimista): a ação envia a versão vista e falha se outro analista agiu antes.
+(concorrência otimista): a ação envia a versão vista e falha se outro analista agiu antes. Detalhes em
+"Console do analista e transferência (P0.6)".
 
 ## Serviço de chamados (P0.2)
 
@@ -139,8 +140,8 @@ de mensagens (`message-writer.ts`). Usa as tabelas que já existiam (`conversati
 - **Dono na própria consulta.** O repositório sempre filtra por `employeeId` da sessão (inclusive na
   trava), então a conversa de outra pessoa nem chega a ser lida.
 - **Estado.** `employeeCanWrite` e `agentCanRespond` (shared) decidem se grava e se o agente pode
-  responder. A mudança de estado em si (transferir, assumir, devolver, encerrar) é do console e do
-  agente, em fases futuras.
+  responder. A mudança de estado em si é do agente (transferir) e do console (assumir, devolver,
+  encerrar; ver "Console do analista e transferência (P0.6)").
 - **Porta do agente.** `AgentResponder` devolve eventos de streaming; a rota só a aciona para
   mensagem ainda sem resposta em conversa `WITH_AGENT`. A implementação real é da P0.5 (abaixo);
   `noAgentResponder` segue como padrão quando nenhum respondedor é injetado (testes).
@@ -241,8 +242,77 @@ execução não depende da conexão: se o cliente sai, a resposta é gravada mes
 - A qualidade da classificação (intenção, tipo, categoria, urgência) depende do modelo; as regras de
   segurança e o cálculo de prioridade não. A avaliação com o modelo real (`npm run test:live`) existe,
   mas não roda sem chave.
-- Assumir, devolver e encerrar (console) ainda não existem: a conversa transferida fica em
-  `WAITING_ANALYST` até a fase do console.
+
+## Console do analista e transferência (P0.6)
+
+Código em [`apps/api/src/console/`](../apps/api/src/console) (regras, repositório, serviço), rotas em
+`http/routes/console.ts` e `http/routes/events.ts`. Contrato em [api-contracts.md](api-contracts.md).
+
+```
+agente transfere ─▶ WAITING_ANALYST ─assume─▶ WITH_ANALYST ─return─▶ WITH_AGENT (pode transferir de novo)
+(Handoff WAITING)   (fila do console)  (ASSUMED, responsável)   │     (RETURNED_TO_AGENT)
+                          │                                     └─close─▶ CLOSED (Handoff CLOSED)
+                          └─close (qualquer analista)─▶ CLOSED
+```
+
+**Quem pode o quê.** `requireAnalyst` (papel `ANALYST` **e** nível N1/N2, lidos do banco a cada
+requisição). N1 e N2 têm as mesmas permissões: o PRD fala em "Suporte N1 e N2", mas não atribui poderes
+diferentes, e inventar uma hierarquia seria ampliar o escopo. Quem assume é o **responsável**: só ele
+responde, devolve ou encerra a conversa em atendimento. Qualquer analista pode encerrar uma conversa
+que ainda aguarda (ninguém é responsável). O console só vê conversas com ao menos uma transferência.
+
+**Regras puras, uma só decisão.** [`console-rules.ts`](../apps/api/src/console/console-rules.ts)
+decide cada ação (`apply`, `replay`, `not_owner`, `stale`, `invalid_state`) sem acessar dados; o
+repositório PostgreSQL e o em memória aplicam exatamente essa decisão. Ordem: responsável → versão →
+estado. Teste em tabela em `console-rules.test.ts`.
+
+**Concorrência.** Toda alteração acontece numa transação que trava a linha da conversa
+(`SELECT ... FOR UPDATE`, a mesma trava das mensagens do funcionário e da publicação do agente) e
+confere `expectedVersion` já com a trava. Assim, dois analistas assumindo, assumir × encerrar, mensagem
+do analista × devolução, mensagem do funcionário × transferência pelo agente e qualquer outra mistura
+são serializados pelo banco, também entre processos. Mutação confirmada: sem a trava, a disputa entre
+N1 e N2 passa a ter mais de um vencedor (o teste falha). `version` só muda em transições, nunca em
+mensagens.
+
+**O agente e a versão.** A publicação do agente compara a `version` da conversa com a que existia
+quando o histórico foi lido. Antes só o *status* era revalidado; agora, se a conversa passou por
+qualquer transição durante a execução (inclusive assumir + devolver, que a deixa de novo em
+`WITH_AGENT`), a resposta é descartada sem gravar nada e a mensagem fica pendente para a retomada,
+que roda com o contexto atual. Mutação confirmada: sem essa comparação o teste do cenário publica a
+resposta de um contexto que já não vale.
+
+**Resposta pendente e atendimento humano.** `pendingAgentResponse` é a última mensagem do funcionário
+sem decisão **e sem mensagem de analista depois dela**. Sem essa segunda condição, ao devolver a
+conversa o agente "responderia de novo" algo que o analista já tratou. Se o funcionário escreveu com o
+analista e ninguém respondeu antes da devolução, a mensagem continua pendente e o agente a atende. Essa
+é uma decisão de comportamento (o PRD não a especifica): documentada aqui e testada.
+
+**Eventos para o funcionário.** [`conversation-events.ts`](../apps/api/src/conversations/conversation-events.ts)
+é um barramento em memória por conversa. Console publica **depois** de gravar. O stream
+(`GET .../events`) assina antes de ler o banco, envia estado + mensagens perdidas (por `Last-Event-ID`
+ou `?after=`) + o que chegou no meio, sem repetir. Perder um evento (queda, reinício) nunca deixa a
+tela errada: a reconexão reconstrói do PostgreSQL. Há keep-alive, limite de 5 conexões por funcionário
+e fechamento ordenado no encerramento da API.
+
+**Privacidade.** Funcionário não entra no console (403); a conversa de outro funcionário e a que nunca
+foi transferida são 404 indistinguíveis de inexistente; o stream de eventos só serve ao dono; o painel
+de chamados vem de `conversation.employeeId` (servidor), nunca de parâmetro; nenhum identificador de
+analista ou papel é lido do corpo, cabeçalhos ou URL; o token não aparece em respostas, URLs nem logs.
+O console não escreve em chamados (nenhuma rota do console usa o serviço de chamados além de listar).
+
+**Decisões e limitações.**
+
+- Ordem da fila: atividade mais recente primeiro (`updatedAt`); não há prioridade por urgência nem
+  SLA de atendimento humano (fora do PRD).
+- A busca ignora maiúsculas, mas não acentos (`ILIKE`); `%` e `_` são literais.
+- Entrega ao vivo por processo. Com mais de uma instância da API, os eventos ao vivo só chegam a quem
+  está conectado à instância que gravou; a recuperação por banco cobre o resto (LISTEN/NOTIFY resolveria).
+- O pedido direto de analista (`POST .../handoff`, P0.6-A) vive em `conversations/handoff-request.ts`: mesma trava de linha, sem LLM, idempotente (ver api-contracts.md).
+- O funcionário vê o `authorId` do analista, não o nome (o contrato de mensagem não tem nome).
+- Rascunhos pendentes continuam confirmáveis pelo funcionário enquanto a conversa não está encerrada
+  (regra da P0.3, inalterada).
+- Se o sistema de chamados estiver fora, o detalhe do console responde 503 repetível (o painel é parte
+  do contrato do detalhe).
 
 ## Regras
 
@@ -329,6 +399,12 @@ vencido). A interface (fase futura) mostra os passos acima da resposta e o detal
   asserção. Medido nesta máquina: supertest + um Express vazio caía em 5 de 40 execuções; com `fetch`,
   o mesmo volume caiu em 0 de 40; a suíte completa atual fecha limpa em ~96% das execuções (24/25).
   Não é uma falha dos testes nem da API: basta rodar de novo. Se aparecer em CI, rode em Linux.
+  **P0.6, medido:** com o arquivo `api-console.test.ts` (51 testes, vários streams SSE) a taxa subiu: 3
+  quedas em 11 execuções completas de `npm test`; isolado, 2/12 (arquivo inteiro), 0/12 (só os testes de
+  SSE) e 1/12 (tudo menos SSE). Houve ainda 1 queda em `console.integration.test.ts` (`test:db`). Em
+  nenhuma delas houve falha de asserção, e em nenhuma o Linux caiu (3 execuções de `npm test` e 2 de
+  `test:db` em container). A causa **não é conhecida**: o recorte por SSE não a explica, e as amostras
+  são pequenas. Uma queda deixa banco descartável órfão (`nexo_test_*`), que pode ser removido.
 - `npm run test:db`: integração com PostgreSQL real (serviço de chamados, API e conversas), com os
   arquivos em sequência (`fileParallelism: false`): em paralelo, a disputa por CPU e conexões no mesmo
   servidor gerava timeouts e quedas de worker alheios ao código. Cada
@@ -338,6 +414,13 @@ vencido). A interface (fase futura) mostra os passos acima da resposta e o detal
   [`agent.integration.test.ts`](../tests/agent.integration.test.ts) cobre o agente de ponta a ponta
   (rota SSE, ferramentas sobre o seed, publicação, confirmação, recuperação, retomadas simultâneas em
   dois "processos", transferência e descarte após assumir).
+  [`console.integration.test.ts`](../tests/console.integration.test.ts) cobre o console sobre
+  PostgreSQL: o fluxo completo com o agente real (pedido → fila → assumir → atender → devolver → agente
+  volta → nova transferência → encerrar), disputas em rajada entre N1 e N2, assumir × encerrar,
+  mensagens × devolução, `clientMessageId` repetido, agente × transferência, o cenário assumir +
+  devolver durante a execução do modelo, reinício da aplicação, reconexão do stream, busca com `%`/`_`,
+  paginação e privacidade. [`api-console.test.ts`](../tests/api-console.test.ts) cobre a mesma API em
+  memória (autorização, validação, N1/N2, eventos); `console-rules.test.ts`, a tabela de decisões.
 - `npm run test:live`: cenários do PRD contra o modelo **real**; fora das outras suítes e só com
   `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor. Nenhum teste automatizado usa credencial real.
 - CI em Linux: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) roda typecheck, `npm test`,

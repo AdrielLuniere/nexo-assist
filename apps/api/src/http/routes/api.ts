@@ -1,8 +1,11 @@
 import { AgentTurnError } from '@nexo/agent';
-import { type ApiErrorBody, IdSchema, LoginRequestSchema, type Message, SendMessageRequestSchema, TicketCodeSchema, type User } from '@nexo/shared';
+import { type ApiErrorBody, IdSchema, LoginRequestSchema, type Message, RequestHandoffRequestSchema, SendMessageRequestSchema, TicketCodeSchema, type User } from '@nexo/shared';
 import type { TicketService } from '@nexo/ticket-service';
 import { type Request, type RequestHandler, type Response, Router } from 'express';
 import type { AuthService } from '../../auth/auth-service.js';
+import type { ConsoleService } from '../../console/console-service.js';
+import type { HandoffRequestService } from '../../conversations/handoff-request.js';
+import { type ConversationEventBus, createConversationEventBus } from '../../conversations/conversation-events.js';
 import type { ConversationRecord } from '../../conversations/conversation-repository.js';
 import type { ConversationService } from '../../conversations/conversation-service.js';
 import { type AgentResponder, noAgentResponder } from '../../conversations/responder.js';
@@ -10,9 +13,11 @@ import type { DraftService } from '../../drafts/draft-service.js';
 import { isTransientDatabaseError } from '../../infra/prisma-errors.js';
 import { BusyError } from '../../infra/write-slots.js';
 import { AppError } from '../app-error.js';
-import { authenticate, currentUser, requireRole } from '../middleware/authenticate.js';
+import { authenticate, currentUser, requireAnalyst, requireRole } from '../middleware/authenticate.js';
 import { type ErrorLogger, busyToAppError } from '../middleware/error-handler.js';
 import { type SseStream, openSse } from '../sse.js';
+import { consoleRouter } from './console.js';
+import { conversationEventsHandler } from './events.js';
 
 export interface ApiDeps {
   readonly auth: AuthService;
@@ -21,6 +26,16 @@ export interface ApiDeps {
   readonly conversations: ConversationService;
   /** Agente que responde às mensagens. Sem ele, a mensagem é gravada e o stream termina sem resposta. */
   readonly responder?: AgentResponder;
+  /** Console do analista (`/api/console/*`). Sem ele essas rotas não existem. */
+  readonly console?: ConsoleService;
+  /**
+   * Barramento dos eventos da conversa. O mesmo que o console usa para avisar o funcionário; sem ele o
+   * stream de eventos funciona, mas só entrega o estado atual e as mensagens já gravadas.
+   */
+  readonly events?: ConversationEventBus;
+  /** Pedido direto de analista pelo funcionário. Sem ele a rota não existe. */
+  readonly handoffs?: HandoffRequestService;
+  readonly eventStreams?: { readonly maxPerUser?: number; readonly heartbeatMs?: number };
 }
 
 /** Respostas autenticadas nunca devem ser guardadas por caches compartilhados. */
@@ -81,6 +96,7 @@ export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
   const responder = deps.responder ?? noAgentResponder;
   const requireLogin = authenticate(deps.auth);
   const employeeOnly = [requireLogin, requireRole('EMPLOYEE')];
+  const events = deps.events ?? createConversationEventBus();
 
   router.use(noStore);
 
@@ -171,6 +187,24 @@ export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
     }
   });
 
+  /** Mensagens do analista e mudanças de estado, sem recarregar a página (ver `events.ts`). */
+  router.get(
+    '/conversations/:conversationId/events',
+    ...employeeOnly,
+    conversationEventsHandler({ conversations: deps.conversations, events, ...deps.eventStreams }),
+  );
+
+  /** O funcionário pede um analista direto, sem passar pelo agente (idempotente). */
+  if (deps.handoffs) {
+    const handoffs = deps.handoffs;
+    router.post('/conversations/:conversationId/handoff', ...employeeOnly, async (req, res) => {
+      const conversationId = IdSchema.parse(req.params.conversationId);
+      const { note } = RequestHandoffRequestSchema.parse(req.body ?? {});
+      const { created, handoff, conversation } = await handoffs.request(currentUser(req), conversationId, { note });
+      res.status(created ? 201 : 200).json({ handoff, conversation });
+    });
+  }
+
   // --- Rascunhos ----------------------------------------------------------
   router.post('/conversations/:conversationId/drafts/:draftId/confirm', ...employeeOnly, async (req, res) => {
     const conversationId = IdSchema.parse(req.params.conversationId);
@@ -183,6 +217,9 @@ export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
     const draftId = IdSchema.parse(req.params.draftId);
     res.json(await deps.drafts.discard(currentUser(req), conversationId, draftId));
   });
+
+  // --- Console do analista ------------------------------------------------
+  if (deps.console) router.use('/console', requireLogin, requireAnalyst, consoleRouter(deps.console));
 
   return router;
 }

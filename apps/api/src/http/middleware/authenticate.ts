@@ -47,6 +47,24 @@ export function requireRole(...roles: UserRole[]): RequestHandler {
   };
 }
 
+/**
+ * Restringe a rota a analistas de suporte (N1 ou N2). Papel e nível vêm do banco (ver `authenticate`);
+ * um usuário marcado como analista sem nível definido é dado inconsistente e também é recusado.
+ */
+export const requireAnalyst: RequestHandler = (req, res, next) => {
+  requireRole('ANALYST')(req, res, (error?: unknown) => {
+    if (error) {
+      next(error);
+      return;
+    }
+    if (req.user?.analystLevel == null) {
+      next(new AppError('FORBIDDEN', 'Você não tem permissão para acessar este recurso.'));
+      return;
+    }
+    next();
+  });
+};
+
 /** Usuário autenticado da requisição; falha se a rota esqueceu de passar por `authenticate`. */
 export function currentUser(req: { user?: User }): User {
   if (!req.user) throw new AppError('UNAUTHENTICATED', 'Autenticação necessária.');

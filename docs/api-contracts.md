@@ -33,6 +33,19 @@ schemas Zod usados pela API (validação) e pela web (parsing). Este documento �
 | POST | `/api/console/conversations/:conversationId/close` | analista | JSON | planejada | Encerra |
 | POST | `/api/console/conversations/:conversationId/messages` | analista | JSON | planejada | Mensagem do analista |
 
+Mapeamento dos erros do serviço de chamados (`TicketServiceError`) para a API, quando as rotas
+`/api/tickets` e de confirmação de rascunho forem implementadas:
+
+| Serviço | API | HTTP |
+| --- | --- | --- |
+| `NOT_FOUND`, `FORBIDDEN` | `NOT_FOUND` (não revela que o chamado existe) | 404 |
+| `DUPLICATE_OPEN_TICKET` | `DUPLICATE_TICKET` | 409 |
+| `REOPEN_WINDOW_EXPIRED` | `REOPEN_WINDOW_EXPIRED` | 422 |
+| `INVALID_STATUS` | `CONFLICT` | 409 |
+| `CONFIRMATION_REQUIRED` | `DRAFT_NOT_PENDING` | 409 |
+| `INVALID_INPUT` | `VALIDATION_ERROR` | 400 |
+| `UNAVAILABLE` (após as tentativas) | `TICKET_SERVICE_UNAVAILABLE` | 503 |
+
 O teste [`contracts.test.ts`](../packages/shared/src/api/contracts.test.ts) garante que o status
 "implementada" corresponde ao que a API de fato expõe.
 

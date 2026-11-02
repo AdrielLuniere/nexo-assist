@@ -18,7 +18,8 @@ import type {
  * - Escritas exigem um rascunho confirmado pelo funcionário (`confirmedDraftId`) e aplicam as
  *   regras de duplicidade, reabertura e prazo.
  *
- * Implementação: P0.2.
+ * Implementação: `default-ticket-service.ts` (P0.2). Persistência pela porta `TicketStore`;
+ * confirmação pela porta `ConfirmationGate`.
  */
 
 export interface RequesterContext {

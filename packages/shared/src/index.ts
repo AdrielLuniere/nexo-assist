@@ -3,6 +3,7 @@ export * from './domain/labels.js';
 export * from './domain/rules.js';
 export * from './domain/user.js';
 export * from './domain/ticket.js';
+export * from './domain/priority.js';
 export * from './domain/draft.js';
 export * from './domain/handoff.js';
 export * from './domain/agent-decision.js';

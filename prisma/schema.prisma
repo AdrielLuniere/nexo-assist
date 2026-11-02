@@ -7,7 +7,7 @@
 //   - O agente (packages/agent) não acessa o banco.
 //
 // Enums espelham packages/shared/src/domain/enums.ts (verificado em tests/prisma-contracts.test.ts).
-// Migrations: nenhuma gerada/aplicada na P0.1. A migration inicial entra na P0.2, após revisão.
+// Migrations: `prisma/migrations` (inicial na P0.2). Aplicar com `npm run db:migrate`.
 
 generator client {
   provider            = "prisma-client"
@@ -285,6 +285,9 @@ model TicketEvent {
 
   ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
+  /// Idempotência: um rascunho confirmado gera no máximo um evento de cada tipo. Confirmações
+  /// concorrentes ou repetidas após falha transitória colidem aqui em vez de duplicar a escrita.
+  @@unique([draftId, type])
   @@index([ticketId, createdAt])
   @@map("ticket_events")
 }

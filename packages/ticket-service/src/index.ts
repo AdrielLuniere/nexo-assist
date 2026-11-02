@@ -1,2 +1,11 @@
 export * from './errors.js';
 export * from './ticket-service.js';
+export * from './confirmation.js';
+export * from './store.js';
+export * from './default-ticket-service.js';
+export * from './resilience.js';
+export * from './outage-simulation.js';
+export * from './in-memory.js';
+export { computeSlaDueAt, isOpenStatus, isOverdue } from './sla.js';
+export { alignToBusinessTime, addBusinessDays, addBusinessHours } from './business-time.js';
+export { DUPLICATE_BLOCK_THRESHOLD, DUPLICATE_CANDIDATE_THRESHOLD, similarityScore } from './duplicates.js';

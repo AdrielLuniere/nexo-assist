@@ -1,0 +1,23 @@
+# PostgreSQL local do Nexo Assist. Uso: `npm run db:up` / `npm run db:down`.
+# Porta do host 5434 para não colidir com instalações locais em 5432/5433.
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: nexo-assist-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexo
+      POSTGRES_PASSWORD: nexo
+      POSTGRES_DB: nexo_assist
+    ports:
+      - '127.0.0.1:5434:5432'
+    volumes:
+      - nexo-assist-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nexo -d nexo_assist']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  nexo-assist-pgdata:

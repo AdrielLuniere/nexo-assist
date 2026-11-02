@@ -1,0 +1,44 @@
+{
+  "name": "nexo-assist",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nexo Assist: agente de IA para o service desk de TI da Nexo (desafio técnico).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "npm@11.12.1",
+  "workspaces": [
+    "packages/shared",
+    "packages/ticket-service",
+    "packages/agent",
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "postinstall": "prisma generate",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @nexo/api\" \"npm run dev -w @nexo/web\"",
+    "dev:api": "npm run dev -w @nexo/api",
+    "dev:web": "npm run dev -w @nexo/web",
+    "typecheck": "prisma generate && tsc -b && tsc -p tsconfig.test.json",
+    "build": "prisma generate && tsc -b && npm run build -w @nexo/web",
+    "start:api": "npm run start -w @nexo/api",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:db": "vitest run --config vitest.db.config.ts",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose stop db",
+    "db:generate": "prisma generate",
+    "db:validate": "prisma validate"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/supertest": "7.2.1",
+    "concurrently": "10.0.6",
+    "prisma": "7.10.1",
+    "supertest": "7.3.1",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

@@ -1,0 +1,397 @@
+// Nexo Assist — esquema inicial (P0.1).
+//
+// Propriedade das tabelas (aplicada por código, não por permissões de banco):
+//   - Serviço de chamados (packages/ticket-service): tickets, ticket_events, ticket_sequences
+//   - API / orquestração (apps/api): users, conversations, messages, ticket_drafts,
+//     agent_decisions, handoffs, help_articles
+//   - O agente (packages/agent) não acessa o banco.
+//
+// Enums espelham packages/shared/src/domain/enums.ts (verificado em tests/prisma-contracts.test.ts).
+// Migrations: nenhuma gerada/aplicada na P0.1. A migration inicial entra na P0.2, após revisão.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../apps/api/src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  EMPLOYEE
+  ANALYST
+}
+
+enum AnalystLevel {
+  N1
+  N2
+}
+
+enum TicketType {
+  INC
+  REQ
+}
+
+enum TicketCategory {
+  ACCESS
+  NETWORK_VPN
+  HARDWARE
+  SOFTWARE
+  EMAIL
+  OTHER
+}
+
+enum TicketPriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TicketStatus {
+  WAITING_ANALYST
+  IN_PROGRESS
+  APPROVED
+  RESOLVED
+  CLOSED
+}
+
+enum AffectedScope {
+  INDIVIDUAL
+  TEAM
+  COMPANY
+}
+
+enum ConversationStatus {
+  WITH_AGENT
+  WAITING_ANALYST
+  WITH_ANALYST
+  CLOSED
+}
+
+enum MessageRole {
+  EMPLOYEE
+  AGENT
+  ANALYST
+  SYSTEM
+}
+
+enum ActorType {
+  EMPLOYEE
+  AGENT
+  ANALYST
+  SYSTEM
+}
+
+enum TicketEventType {
+  CREATED
+  UPDATED
+  COMMENT_ADDED
+  STATUS_CHANGED
+  PRIORITY_CHANGED
+  REOPENED
+  TRANSFERRED
+}
+
+enum DraftOperation {
+  CREATE
+  UPDATE
+  REOPEN
+}
+
+enum DraftStatus {
+  PENDING
+  CONFIRMED
+  DISCARDED
+  SUPERSEDED
+}
+
+enum HandoffReason {
+  EMPLOYEE_REQUEST
+  CRITICAL_ISSUE
+  OVERDUE_TICKET
+  LOW_CONFIDENCE
+}
+
+enum HandoffStatus {
+  WAITING
+  ASSUMED
+  RETURNED_TO_AGENT
+  CLOSED
+}
+
+enum AgentIntent {
+  ASK_QUESTION
+  CHECK_TICKET_STATUS
+  UPDATE_TICKET
+  OPEN_TICKET
+  REOPEN_TICKET
+  TALK_TO_ANALYST
+  OUT_OF_SCOPE
+  SMALL_TALK
+  UNCLEAR
+}
+
+enum AgentAction {
+  ANSWER_FROM_HELP_CENTER
+  SHOW_TICKETS
+  ASK_TICKET_SELECTION
+  ASK_CLARIFICATION
+  PROPOSE_TICKET_DRAFT
+  PROPOSE_TICKET_UPDATE
+  PROPOSE_TICKET_REOPEN
+  TRANSFER_TO_ANALYST
+  REDIRECT_OUT_OF_SCOPE
+  REPLY
+}
+
+// ---------------------------------------------------------------------------
+// Usuários
+// ---------------------------------------------------------------------------
+
+/// Funcionários e analistas. Dados de exemplo fictícios (Anexo B). Sem senha: o login
+/// aceita qualquer senha para os usuários cadastrados (PRD, Tela 1).
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String
+  role         UserRole      @default(EMPLOYEE)
+  analystLevel AnalystLevel?
+  department   String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  conversations         Conversation[] @relation("EmployeeConversations")
+  assignedConversations Conversation[] @relation("AssignedAnalyst")
+  authoredMessages      Message[]
+  requestedTickets      Ticket[]
+  ticketDrafts          TicketDraft[]
+  assumedHandoffs       Handoff[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Conversas
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id                   String             @id @default(cuid())
+  employeeId           String
+  status               ConversationStatus @default(WITH_AGENT)
+  assignedAnalystId    String?
+  title                String?
+  /// Resumo acumulado das trocas antigas, para enviar menos contexto ao modelo.
+  summary              String?
+  /// Contador para o limite de mensagens por sessão.
+  employeeMessageCount Int                @default(0)
+  /// Concorrência otimista para assumir/devolver/encerrar.
+  version              Int                @default(0)
+  lastMessageAt        DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  employee        User            @relation("EmployeeConversations", fields: [employeeId], references: [id])
+  assignedAnalyst User?           @relation("AssignedAnalyst", fields: [assignedAnalystId], references: [id])
+  messages        Message[]
+  drafts          TicketDraft[]
+  decisions       AgentDecision[]
+  handoffs        Handoff[]
+  originTickets   Ticket[]
+
+  @@index([employeeId, updatedAt])
+  @@index([status, updatedAt])
+  @@map("conversations")
+}
+
+model Message {
+  id              String      @id @default(cuid())
+  conversationId  String
+  role            MessageRole
+  /// Funcionário ou analista; nulo para mensagens do agente e do sistema.
+  authorId        String?
+  content         String
+  /// MessageBlock[] validado por Zod (packages/shared).
+  blocks          Json        @default("[]")
+  /// Idempotência de reenvio pelo cliente.
+  clientMessageId String?
+  createdAt       DateTime    @default(now())
+
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?          @relation(fields: [authorId], references: [id])
+  decision     AgentDecision?
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// Sistema de chamados simulado
+// ---------------------------------------------------------------------------
+
+model Ticket {
+  id                   String         @id @default(cuid())
+  /// Código público, ex.: INC-20311.
+  code                 String         @unique
+  type                 TicketType
+  title                String
+  description          String
+  category             TicketCategory
+  priority             TicketPriority
+  status               TicketStatus   @default(WAITING_ANALYST)
+  affectedScope        AffectedScope
+  affectedDescription  String
+  requesterId          String
+  /// Prazo vigente (primeira resposta ou próxima atualização). Vencido = passou e segue aberto.
+  slaDueAt             DateTime
+  firstResponseAt      DateTime?
+  resolvedAt           DateTime?
+  closedAt             DateTime?
+  originConversationId String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  requester          User          @relation(fields: [requesterId], references: [id])
+  originConversation Conversation? @relation(fields: [originConversationId], references: [id], onDelete: SetNull)
+  events             TicketEvent[]
+
+  @@index([requesterId, status])
+  @@index([status, slaDueAt])
+  @@map("tickets")
+}
+
+/// Histórico do chamado (append-only).
+model TicketEvent {
+  id        String          @id @default(cuid())
+  ticketId  String
+  type      TicketEventType
+  actorType ActorType
+  actorId   String?
+  /// Rascunho confirmado que originou o evento, quando a escrita veio do chat.
+  draftId   String?
+  comment   String?
+  /// Campos alterados: { campo: { from, to } }.
+  changes   Json?
+  createdAt DateTime        @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_events")
+}
+
+/// Numeração sequencial por tipo (INC-20312, REQ-10443...), incrementada atomicamente.
+model TicketSequence {
+  type       TicketType @id
+  lastNumber Int
+
+  @@map("ticket_sequences")
+}
+
+// ---------------------------------------------------------------------------
+// Central de ajuda
+// ---------------------------------------------------------------------------
+
+model HelpArticle {
+  id        String          @id @default(cuid())
+  slug      String          @unique
+  title     String
+  body      String
+  category  TicketCategory?
+  tags      String[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@map("help_articles")
+}
+
+// ---------------------------------------------------------------------------
+// Rascunhos, decisões e transferências
+// ---------------------------------------------------------------------------
+
+/// Proposta de escrita aguardando confirmação do funcionário (Anexo A, "Abertura").
+model TicketDraft {
+  id             String         @id @default(cuid())
+  conversationId String
+  employeeId     String
+  operation      DraftOperation
+  /// Chamado alvo (UPDATE/REOPEN).
+  targetTicketId String?
+  /// DraftPayload validado por Zod (packages/shared).
+  payload        Json
+  status         DraftStatus    @default(PENDING)
+  /// Chamado criado/atualizado após a confirmação.
+  resultTicketId String?
+  confirmedAt    DateTime?
+  discardedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  employee     User         @relation(fields: [employeeId], references: [id])
+
+  @@index([conversationId, status])
+  @@map("ticket_drafts")
+}
+
+/// O que o agente entendeu, que ação tomou, com que segurança e por quê (PRD, item 7).
+model AgentDecision {
+  id               String      @id @default(cuid())
+  conversationId   String
+  /// Mensagem do agente gerada por esta decisão.
+  messageId        String?     @unique
+  /// Mensagem do funcionário que disparou a decisão.
+  triggerMessageId String?
+  intent           AgentIntent
+  understanding    String
+  action           AgentAction
+  /// 0..1
+  confidence       Float
+  rationale        String
+  ruleRefs         String[]
+  /// AgentStep[] validado por Zod (packages/shared).
+  steps            Json        @default("[]")
+  model            String?
+  inputTokens      Int?
+  outputTokens     Int?
+  latencyMs        Int?
+  createdAt        DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@map("agent_decisions")
+}
+
+/// Transferência da conversa para um analista (Anexo A, "Transferência").
+model Handoff {
+  id              String        @id @default(cuid())
+  conversationId  String
+  reason          HandoffReason
+  status          HandoffStatus @default(WAITING)
+  requestedBy     ActorType
+  /// Resumo do caso para o analista.
+  summary         String
+  relatedTicketId String?
+  assumedById     String?
+  assumedAt       DateTime?
+  endedAt         DateTime?
+  createdAt       DateTime      @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  assumedBy    User?        @relation(fields: [assumedById], references: [id])
+
+  @@index([status, createdAt])
+  @@index([conversationId])
+  @@map("handoffs")
+}

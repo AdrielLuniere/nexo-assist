@@ -1,0 +1,26 @@
+# Dependências
+node_modules/
+
+# Saídas de build
+dist/
+*.tsbuildinfo
+coverage/
+
+# Cliente Prisma gerado (recriado por `prisma generate`)
+apps/api/src/generated/
+
+# Ambiente: nunca versionar segredos
+.env
+.env.*
+!.env.example
+
+# Logs e sistema
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/

@@ -336,16 +336,18 @@ function ConversationView({ state, user, onBack, onTickets }: { state: ConsoleCo
               <span className="text-amber-700">
                 <Icons.headset className="size-5" />
               </span>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-[11rem] flex-1">
                 <p className="text-sm font-semibold">{name} espera um atendente</p>
                 <p className="text-xs text-slate-500">Agente pausado{activeHandoff ? ` desde ${formatTime(activeHandoff.createdAt)}` : ''}</p>
               </div>
+              <div className="flex w-full justify-end gap-2 sm:w-auto">
               <Button onClick={() => void state.act('close')} busy={state.busy === 'close'} disabled={state.busy !== null}>
                 Encerrar
               </Button>
               <Button variant="primary" onClick={() => void state.act('assume')} busy={state.busy === 'assume'} disabled={state.busy !== null}>
                 <Icons.headset /> Assumir atendimento
               </Button>
+              </div>
             </div>
           ) : mine ? (
             <AnalystComposer state={state} name={name} />
@@ -355,7 +357,7 @@ function ConversationView({ state, user, onBack, onTickets }: { state: ConsoleCo
                 ? 'Outro analista está atendendo esta conversa. Só quem assumiu pode responder.'
                 : detail.status === 'WITH_AGENT'
                   ? 'A conversa está com o agente. Se ela voltar a precisar de um analista, aparece de novo como aguardando.'
-                  : 'Atendimento encerrado.'}
+                  : 'Esta conversa está encerrada.'}
             </p>
           )}
         </div>

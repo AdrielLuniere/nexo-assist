@@ -4,7 +4,7 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.7 (interface web completa: login, chat do funcionário e console do analista).**
+> **Status: P0.8 (homologação: validação no navegador real e avaliação do agente).**
 >
 > | Implementado | Planejado |
 > | --- | --- |
@@ -66,7 +66,9 @@ A página da web mostra se a API e o banco estão de pé.
 | `npm run dev` | API (tsx watch) e web (Vite) juntas |
 | `npm test` | Testes unitários, de arquitetura, de API e **de interface** (sem banco; a interface roda em jsdom contra a API real em memória, com o agente e um modelo roteirizado). No Windows o worker do Vitest cai de vez em quando por um aborto nativo; se aparecer "Worker exited unexpectedly", rode de novo (detalhes em [docs/architecture.md](docs/architecture.md), seção Testes) |
 | `npm run test:db` | Integração com PostgreSQL real em banco descartável, criado e removido a cada execução (exige `npm run db:up`); inclui o agente de ponta a ponta com LLM simulado e o console do analista (concorrência) |
-| `npm run test:live` | Avaliação com o modelo **real** (opcional, custa tokens): só roda com `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor |
+| `npm run test:live` | Avaliação com o modelo **real** (opcional, custa tokens): só roda com `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor, com teto de tokens. Procedimento em [docs/avaliacao-agente.md](docs/avaliacao-agente.md) |
+| `npm run test:e2e` | Homologação no **navegador real** (Chrome/Edge) com API real e PostgreSQL descartável; só o modelo é roteirizado (sem custo). Exige `npm run db:up`. Roteiro em [docs/homologacao.md](docs/homologacao.md) |
+| `npm run demo:check` | Diagnóstico **somente leitura** do ambiente de demonstração: banco de destino, migrations, seed, modelo e portas, com o comando para corrigir cada pendência |
 | `npm run db:migrate` | Aplica as migrations ao banco do `.env` |
 | `npm run db:seed -- --confirm` | Insere os dados de exemplo no banco do `.env` |
 | `npm run typecheck` | Tipagem estrita de todos os pacotes e testes |
@@ -124,7 +126,10 @@ das ferramentas e a justificativa objetiva que o modelo entrega.
 simulado (roteirizado): dúvida pela central de ajuda, consulta sem número, chamado alheio,
 rascunho, duplicidade, reabertura, baixa confiança, fora de escopo, falhas do provedor, limites e
 tempo máximo. A integração com PostgreSQL cobre publicação, confirmação, recuperação e transferência.
-`npm run test:live` avalia o modelo real em cenários do PRD (verifica comportamento, não texto).
+Uma **matriz de 18 cenários** do PRD e do Anexo A (intenção, ferramenta, classificação, perguntas,
+confirmação, privacidade, encaminhamento e justificativa) roda sem custo com o modelo roteirizado e, com
+chave, com o modelo real (`npm run test:live`, verifica comportamento, não texto, com teto de tokens).
+O que cada execução prova e o que não prova: [docs/avaliacao-agente.md](docs/avaliacao-agente.md).
 
 ## Escolha do modelo
 
@@ -136,6 +141,20 @@ provedor do model router do Mastra funciona trocando `AGENT_MODEL` (ex.: `openai
 Custo controlado por resposta: até 6 chamadas ao modelo, 8 execuções de ferramenta, 1.500 tokens de
 saída por chamada, histórico das últimas 24 mensagens, 45 s de tempo máximo e no máximo 4 respostas
 simultâneas por processo (`AGENT_TIMEOUT_MS`, `AGENT_MAX_CONCURRENCY`).
+
+## Demonstração em 6 comandos
+
+```bash
+npm install && cp .env.example .env     # primeira vez
+npm run db:up                           # PostgreSQL
+npm run demo:check                      # o que falta? (não altera nada)
+npm run db:migrate && npm run db:seed -- --confirm   # ALTERA o banco do .env
+npm run dev                             # http://localhost:5173
+```
+
+Entre com `ana.souza@nexo.com.br` (funcionária) ou `marcos.oliveira@nexo.com.br` (analista), qualquer
+senha. Para o agente responder, defina `AGENT_MODEL` e a chave do provedor no `.env`. Detalhes e o estado
+verificado: [docs/homologacao.md](docs/homologacao.md).
 
 ## A interface
 

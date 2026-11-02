@@ -46,6 +46,25 @@ async function openChatAndSend(user: Awaited<ReturnType<typeof startApp>>['user'
 }
 
 describe('chat do funcionário', () => {
+  it('nova conversa: o campo fica bloqueado até a nova abrir, e a mensagem nunca vai para a conversa antiga', async () => {
+    const { user, h } = await startApp({ agentScript: [submit(proposal({ reply: 'Oi!' })), submit(proposal({ reply: 'Na conversa nova.' }))] });
+    await openChatAndSend(user, 'Primeira conversa');
+    await screen.findByText('Oi!');
+    const before = (await apiAs(h, await h.login(ANA)).get('/api/conversations')).body.items as Array<{ id: string }>;
+
+    await user.click(screen.getAllByRole('button', { name: /nova conversa/i })[0] as HTMLElement);
+    expect((screen.getByLabelText('Mensagem') as HTMLTextAreaElement).disabled).toBe(true);
+    await waitFor(() => expect((screen.getByLabelText('Mensagem') as HTMLTextAreaElement).disabled).toBe(false));
+    await user.type(screen.getByLabelText('Mensagem'), 'Segunda conversa{Enter}');
+    expect(await screen.findByText('Na conversa nova.')).toBeTruthy();
+
+    const after = (await apiAs(h, await h.login(ANA)).get('/api/conversations')).body.items as Array<{ id: string }>;
+    expect(after).toHaveLength(before.length + 1);
+    const oldId = before[0]!.id;
+    const old = (await apiAs(h, await h.login(ANA)).get(`/api/conversations/${oldId}`)).body.conversation.messages as Array<{ content: string }>;
+    expect(old.map((m) => m.content)).not.toContain('Segunda conversa');
+  });
+
   it('envia, mostra as ações executadas acima da resposta e o card do chamado vencido', async () => {
     const { user } = await startApp({ agentScript: SHOW_OVERDUE });
     await openChatAndSend(user, 'Como estão meus chamados?');

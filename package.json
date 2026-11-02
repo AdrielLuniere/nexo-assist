@@ -27,9 +27,11 @@
     "test:watch": "vitest",
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",
     "db:migrate": "prisma migrate deploy",
+    "demo:check": "tsx --conditions=@nexo/source apps/api/src/demo/check.ts",
     "db:seed": "tsx --conditions=@nexo/source apps/api/src/seed/run.ts",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate"

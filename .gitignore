@@ -24,3 +24,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Saídas da homologação no navegador (capturas de tela)
+test-results/

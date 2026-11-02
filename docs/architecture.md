@@ -443,6 +443,9 @@ vencido). A interface (fase futura) mostra os passos acima da resposta e o detal
   nenhuma delas houve falha de asserção, e em nenhuma o Linux caiu (3 execuções de `npm test` e 2 de
   `test:db` em container). A causa **não é conhecida**: o recorte por SSE não a explica, e as amostras
   são pequenas. Uma queda deixa banco descartável órfão (`nexo_test_*`), que pode ser removido.
+  **P0.8, medido:** com 30 arquivos (incluindo os de interface em jsdom), 2 de 4 execuções de `npm test`
+  perderam workers (3 quedas no total, em `api-conversations`, `api-agent-memory` e `api-handoff-request`),
+  de novo sem asserção falhando e sem queda no Linux (CI: 28 arquivos, verde). Causa desconhecida.
 - `npm run test:db`: integração com PostgreSQL real (serviço de chamados, API e conversas), com os
   arquivos em sequência (`fileParallelism: false`): em paralelo, a disputa por CPU e conexões no mesmo
   servidor gerava timeouts e quedas de worker alheios ao código. Cada
@@ -461,6 +464,12 @@ vencido). A interface (fase futura) mostra os passos acima da resposta e o detal
   memória (autorização, validação, N1/N2, eventos); `console-rules.test.ts`, a tabela de decisões.
 - `npm run test:live`: cenários do PRD contra o modelo **real**; fora das outras suítes e só com
   `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor. Nenhum teste automatizado usa credencial real.
+- `npm run test:e2e`: homologação no **navegador real** (Chrome/Edge por DevTools) com a web, a API e o
+  PostgreSQL descartável reais; só o modelo é roteirizado. Roteiro e resultados em
+  [homologacao.md](homologacao.md). Fora de `npm test` e do CI (exige navegador).
+- Avaliação do agente: matriz de 18 cenários ([`tests/eval/`](../tests/eval)) com modelo roteirizado em
+  `npm test` e, opcionalmente, com o modelo real; ver [avaliacao-agente.md](avaliacao-agente.md).
+- `npm run demo:check`: diagnóstico somente leitura do ambiente de demonstração.
 - CI em Linux: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) roda typecheck, `npm test`,
   build e `test:db` com PostgreSQL 17 do próprio job.
 

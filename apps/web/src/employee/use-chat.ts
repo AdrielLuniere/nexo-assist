@@ -272,6 +272,12 @@ export function useChat(client: ApiClient, options: { retryDelays?: readonly num
 
   const startNew = useCallback(async () => {
     setError(null);
+    // Solta a conversa atual já: até a nova abrir, o campo fica desabilitado e nada é enviado à antiga.
+    activeRef.current = null;
+    setDetail(null);
+    setDetailState('loading');
+    setLive(null);
+    setSending(null);
     try {
       const conversation = await client.startConversation();
       activeRef.current = conversation.id;
@@ -282,6 +288,7 @@ export function useChat(client: ApiClient, options: { retryDelays?: readonly num
       setNotice(null);
       await refreshList();
     } catch (err) {
+      setDetailState('error');
       setError({ message: errorMessage(err), retry: null });
     }
   }, [client, refreshList]);

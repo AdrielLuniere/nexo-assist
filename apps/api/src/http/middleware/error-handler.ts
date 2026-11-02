@@ -1,7 +1,10 @@
 import type { ApiErrorBody } from '@nexo/shared';
 import type { ErrorRequestHandler, RequestHandler, Response } from 'express';
+import { TicketServiceError } from '@nexo/ticket-service';
 import { ZodError } from 'zod';
+import { isTransientDatabaseError } from '../../infra/prisma-errors.js';
 import { AppError } from '../app-error.js';
+import { ticketErrorToAppError } from '../ticket-errors.js';
 
 export interface ErrorLogger {
   error(message: string, context: Record<string, unknown>): void;
@@ -17,6 +20,8 @@ function send(res: Response, error: AppError, requestId: string): void {
       ...(error.details === undefined ? {} : { details: error.details }),
     },
   };
+  if (error.retryable && error.httpStatus === 503) res.setHeader('retry-after', '5');
+  res.setHeader('cache-control', 'no-store');
   res.status(error.httpStatus).json(body);
 }
 
@@ -38,6 +43,16 @@ export function createErrorHandler(logger: ErrorLogger): ErrorRequestHandler {
 
     if (error instanceof AppError) {
       send(res, error, req.requestId);
+      return;
+    }
+
+    if (error instanceof TicketServiceError) {
+      send(res, ticketErrorToAppError(error), req.requestId);
+      return;
+    }
+
+    if (isTransientDatabaseError(error)) {
+      send(res, new AppError('DATABASE_UNAVAILABLE', 'Banco de dados indisponível. Tente novamente em instantes.'), req.requestId);
       return;
     }
 

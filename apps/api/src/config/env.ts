@@ -12,6 +12,21 @@ const EnvSchema = z.object({
   HEALTH_DB_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
   /** Modelo do agente (`provedor/modelo`). Opcional na P0.1: o agente ainda não é invocado. */
   AGENT_MODEL: z.string().min(3).optional(),
+  /**
+   * Segredo que assina os tokens de sessão (mínimo 32 caracteres). Obrigatório em produção; fora dela,
+   * se ausente, a API gera um segredo efêmero (as sessões não sobrevivem a um reinício).
+   */
+  AUTH_SECRET: z.preprocess(
+    // `AUTH_SECRET=` vazio no .env conta como ausente.
+    (value) => (value === '' ? undefined : value),
+    z.string().min(32, 'AUTH_SECRET deve ter ao menos 32 caracteres').optional(),
+  ),
+  /** Duração da sessão demonstrativa, em minutos. */
+  AUTH_SESSION_TTL_MINUTES: z.coerce.number().int().min(1).max(10_080).default(480),
+}).superRefine((value, ctx) => {
+  if (value.NODE_ENV === 'production' && !value.AUTH_SECRET) {
+    ctx.addIssue({ code: 'custom', path: ['AUTH_SECRET'], message: 'AUTH_SECRET é obrigatória em produção' });
+  }
 });
 
 export type Env = z.infer<typeof EnvSchema>;

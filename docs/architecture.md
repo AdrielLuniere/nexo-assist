@@ -97,6 +97,26 @@ partir de 0,34; `create` recusa a partir de 0,6 com `DUPLICATE_OPEN_TICKET` apon
 atualizar. Limitação conhecida: textos muito diferentes sobre o mesmo problema não são detectados;
 nesse caso a decisão fica com o agente e o funcionário.
 
+## API HTTP e autenticação (P0.3)
+
+Camadas em `apps/api/src`, de fora para dentro: `http/` (Express: rotas, middlewares, erros) →
+serviços (`auth/`, `drafts/`, `@nexo/ticket-service`) → repositórios Prisma (`infra/`). As rotas só
+traduzem HTTP; nenhuma regra do Anexo A vive nelas.
+
+- **Identidade só no backend.** `authenticate` valida o token e carrega o usuário do banco em
+  `req.user`; as rotas leem `currentUser(req)`. Nenhum `employeeId` vindo do cliente é lido em lugar
+  algum, e o serviço de chamados recebe o solicitante como `RequesterContext`.
+- **Duas camadas contra escrita sem confirmação.** (1) Não há rota de escrita direta. (2) Mesmo que
+  houvesse, o serviço de chamados consulta o `ConfirmationGate`
+  ([`draft-gate.ts`](../apps/api/src/drafts/draft-gate.ts)) antes de escrever, e ele só libera
+  rascunho `CONFIRMED`, do mesmo funcionário e conversa, com o mesmo conteúdo.
+- **Máquina de estados do rascunho** em [`draft-service.ts`](../apps/api/src/drafts/draft-service.ts),
+  com transições compare-and-swap no banco. A idempotência reaproveita a do serviço de chamados
+  (índice único em `ticket_events`) e a da mensagem de resultado (`clientMessageId` único por
+  conversa). Detalhes e decisões em `docs/api-contracts.md`, seção "Confirmação de rascunhos".
+- **Sessão**: token HMAC com expiração; papel relido do banco a cada requisição (ver
+  `docs/api-contracts.md`, seção "Autenticação").
+
 ## Regras
 
 Parâmetros em [`packages/shared/src/domain/rules.ts`](../packages/shared/src/domain/rules.ts).
@@ -145,8 +165,10 @@ os passos acima da resposta e o detalhe ao expandir.
 
 ## Testes
 
-- `npm test`: unitários e de arquitetura, sem banco (serviço sobre `TicketStore` em memória).
-- `npm run test:db`: integração com PostgreSQL real. Cada execução cria um banco descartável
+- `npm test`: unitários, de arquitetura e HTTP, sem banco (serviços sobre repositórios em memória; a
+  API é exercitada com supertest).
+- `npm run test:db`: integração com PostgreSQL real (serviço de chamados e API completa). Cada
+  arquivo cria um banco descartável
   (`nexo_test_<aleatório>`) no servidor local, aplica a migration nele com `prisma migrate deploy`,
   roda o seed e remove o banco ao final. O banco do `.env` nunca é tocado.
 

@@ -10,21 +10,16 @@ import {
   type TicketStoreOps,
 } from '@nexo/ticket-service';
 import { Prisma, type PrismaClient } from '../generated/prisma/client.js';
+import { isTransientDatabaseError } from './prisma-errors.js';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** Códigos do Prisma que indicam banco inacessível ou ocupado: transitórios, a chamada pode ser repetida. */
-const TRANSIENT_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2028', 'P2034']);
-
 /** Traduz erros do Prisma para os do serviço: nunca vaza SQL, string de conexão ou credenciais. */
 export function mapPrismaError(error: unknown): unknown {
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (error.code === 'P2002') return new StoreConflictError('violação de unicidade');
-    if (TRANSIENT_CODES.has(error.code)) {
-      return new TicketServiceError('UNAVAILABLE', 'Sistema de chamados indisponível.');
-    }
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    return new StoreConflictError('violação de unicidade');
   }
-  if (error instanceof Prisma.PrismaClientInitializationError) {
+  if (isTransientDatabaseError(error)) {
     return new TicketServiceError('UNAVAILABLE', 'Sistema de chamados indisponível.');
   }
   return error;

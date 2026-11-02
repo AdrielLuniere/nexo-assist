@@ -17,8 +17,27 @@ describe('catálogo de rotas', () => {
     }
   });
 
-  it('na P0.1 só /health está implementada', () => {
-    expect(routes.filter((route) => route.status === 'implemented').map((route) => route.path)).toEqual(['/health']);
+  it('lista exatamente as rotas implementadas até a P0.3', () => {
+    expect(
+      routes
+        .filter((route) => route.status === 'implemented')
+        .map((route) => `${route.method} ${route.path}`)
+        .sort(),
+    ).toEqual(
+      [
+        'GET /health',
+        'POST /api/auth/login',
+        'GET /api/auth/me',
+        'GET /api/tickets',
+        'GET /api/tickets/:ticketCode',
+        'POST /api/conversations/:conversationId/drafts/:draftId/confirm',
+        'POST /api/conversations/:conversationId/drafts/:draftId/discard',
+      ].sort(),
+    );
+  });
+
+  it('nenhuma rota implementada exige papel de analista (console ainda é planejado)', () => {
+    expect(routes.filter((r) => r.status === 'implemented' && (r.auth as string) === 'analyst')).toEqual([]);
   });
 
   it('console exige papel de analista', () => {

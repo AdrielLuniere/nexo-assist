@@ -1,44 +1,22 @@
-import {
-  type ConfirmationCheck,
-  type ConfirmationGate,
-  TicketServiceError,
-  draftMatchesCheck,
-} from '@nexo/ticket-service';
-import { DraftPayloadSchema } from '@nexo/shared';
+import type { ConfirmationGate } from '@nexo/ticket-service';
+import { createDraftRepositoryGate } from '../drafts/draft-gate.js';
+import { createPrismaDraftRepository } from '../drafts/draft-repository.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { mapPrismaError } from './prisma-ticket-store.js';
 
 /**
- * Confirma, na tabela `ticket_drafts` (propriedade da API), que o funcionário autenticado
- * confirmou este rascunho, nesta conversa, com exatamente o conteúdo que será escrito.
- * A rota de confirmação (planejada) marca o rascunho como CONFIRMED antes de chamar o serviço.
+ * Confirmação lida da tabela `ticket_drafts` (ver `drafts/draft-gate.ts`). Falhas transitórias do
+ * banco viram `UNAVAILABLE`, para o serviço de chamados poder repetir a operação com segurança.
  */
 export function createPrismaConfirmationGate(prisma: PrismaClient): ConfirmationGate {
-  const refuse = () =>
-    new TicketServiceError(
-      'CONFIRMATION_REQUIRED',
-      'O funcionário precisa confirmar o rascunho antes de criar ou atualizar o chamado.',
-    );
-
+  const gate = createDraftRepositoryGate(createPrismaDraftRepository(prisma));
   return {
-    async assertConfirmed(check: ConfirmationCheck) {
-      let draft;
+    async assertConfirmed(check) {
       try {
-        draft = await prisma.ticketDraft.findUnique({ where: { id: check.draftId } });
+        await gate.assertConfirmed(check);
       } catch (error) {
         throw mapPrismaError(error);
       }
-      if (
-        !draft ||
-        draft.status !== 'CONFIRMED' ||
-        draft.employeeId !== check.employeeId ||
-        draft.conversationId !== check.conversationId ||
-        draft.operation !== check.operation
-      ) {
-        throw refuse();
-      }
-      const payload = DraftPayloadSchema.safeParse(draft.payload);
-      if (!payload.success || !draftMatchesCheck(payload.data, check)) throw refuse();
     },
   };
 }

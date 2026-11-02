@@ -4,7 +4,7 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.2 (serviço de chamados e persistência).**
+> **Status: P0.3 (autenticação, API de chamados e confirmação de rascunhos).**
 >
 > | Implementado | Planejado |
 > | --- | --- |
@@ -12,8 +12,11 @@ chamados para confirmação e chama um analista quando precisa.
 > | Migration inicial e seed de exemplo | Agente com ferramentas e streaming |
 > | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | Telas do protótipo (chat e console) |
 > | Persistência do serviço de chamados em PostgreSQL | Persistência de conversas e mensagens (as tabelas existem; falta o código) |
+> | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | Console do analista e transferência |
+> | `GET /api/tickets`, `GET /api/tickets/:code`, confirmar e descartar rascunho | Streaming do chat |
 >
-> O serviço de chamados ainda não está ligado a nenhuma rota HTTP: é exercitado pelos testes.
+> Não existe criação de rascunhos pela API: quem os propõe é o agente (fase futura). Veja a lista
+> completa de rotas, implementadas e planejadas, em [docs/api-contracts.md](docs/api-contracts.md).
 
 ## Como rodar
 
@@ -28,10 +31,18 @@ npm run db:seed -- --confirm   # dados de exemplo (opcional, só insere)
 npm run dev            # API em :3333 e web em http://localhost:5173
 ```
 
+O login é demonstrativo (qualquer senha não vazia para os usuários de exemplo; exige banco migrado e com o seed). Em produção defina
+`AUTH_SECRET` (mínimo 32 caracteres); em desenvolvimento, sem ele, a API usa um segredo efêmero.
+
+```bash
+curl -s localhost:3333/api/auth/login -H 'content-type: application/json' \
+  -d '{"email":"ana.souza@nexo.com.br","password":"qualquer"}'      # devolve { token, expiresAt, user }
+curl -s localhost:3333/api/tickets -H "authorization: Bearer $TOKEN"
+```
+
 `db:migrate` e `db:seed` alteram o banco do `.env` e por isso são sempre manuais. O seed recusa
 bancos não locais e mantém linhas que já existem. `SEED_NOW=<ISO 8601>` fixa o instante de
-referência para gerar dados idênticos entre execuções. Usuários de exemplo (o login por rota ainda
-não existe): `ana.souza@nexo.com.br` (funcionária) e `marcos.oliveira@nexo.com.br` (analista).
+referência para gerar dados idênticos entre execuções. Usuários de exemplo: `ana.souza@nexo.com.br` (funcionária) e `marcos.oliveira@nexo.com.br` (analista).
 
 A página da web mostra se a API e o banco estão de pé.
 

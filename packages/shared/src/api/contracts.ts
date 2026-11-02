@@ -15,7 +15,7 @@ import { HealthResponseSchema } from './health.js';
 
 /**
  * Contratos HTTP da API. Rotas de negócio ficam sob `/api`.
- * Autenticação: `Authorization: Bearer <token>` (formato do token definido na P0.2).
+ * Autenticação: `Authorization: Bearer <token>`; token assinado (HMAC-SHA256) com expiração, emitido por `/api/auth/login`.
  *
  * Regra de privacidade aplicada no servidor: rotas `/api/tickets` e `/api/conversations`
  * sempre filtram pelo funcionário autenticado; o id do dono nunca vem do cliente nem do modelo.
@@ -133,7 +133,8 @@ export const AnalystMessageRequestSchema = z.object({
 // --- Catálogo de rotas ------------------------------------------------------
 
 export type HttpMethod = 'GET' | 'POST';
-export type RouteAuth = 'public' | 'employee' | 'analyst';
+/** `authenticated`: qualquer usuário logado (funcionário ou analista). */
+export type RouteAuth = 'public' | 'authenticated' | 'employee' | 'analyst';
 export type RouteStatus = 'implemented' | 'planned';
 export type RouteResponse = 'json' | 'sse';
 
@@ -168,7 +169,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/auth/login',
     auth: 'public',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Login com e-mail corporativo (Tela 1).',
     body: LoginRequestSchema,
@@ -177,8 +178,8 @@ export const API_ROUTES = {
   me: {
     method: 'GET',
     path: '/api/auth/me',
-    auth: 'employee',
-    status: 'planned',
+    auth: 'authenticated',
+    status: 'implemented',
     response: 'json',
     summary: 'Usuário autenticado.',
     success: z.object({ user: UserSchema }),
@@ -232,7 +233,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/conversations/:conversationId/drafts/:draftId/confirm',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Confirma o rascunho e executa a escrita no serviço de chamados (idempotente).',
     success: DraftConfirmationResponseSchema,
@@ -241,7 +242,7 @@ export const API_ROUTES = {
     method: 'POST',
     path: '/api/conversations/:conversationId/drafts/:draftId/discard',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Descarta o rascunho.',
     success: z.object({ draft: TicketDraftSchema }),
@@ -261,7 +262,7 @@ export const API_ROUTES = {
     method: 'GET',
     path: '/api/tickets',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Chamados do funcionário autenticado.',
     success: ListOf(TicketSummarySchema),
@@ -270,7 +271,7 @@ export const API_ROUTES = {
     method: 'GET',
     path: '/api/tickets/:ticketCode',
     auth: 'employee',
-    status: 'planned',
+    status: 'implemented',
     response: 'json',
     summary: 'Detalhe de um chamado do próprio funcionário (404 para chamados de terceiros).',
     success: z.object({ ticket: TicketDetailSchema }),

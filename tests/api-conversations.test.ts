@@ -223,7 +223,7 @@ describe('POST /api/conversations/:id/messages', () => {
 });
 
 describe('idempotência e ordenação', () => {
-  it('reenviar o mesmo clientMessageId não duplica a mensagem nem consome o limite', async () => {
+  it('reenviar mensagem já respondida não duplica nada nem aciona o agente de novo', async () => {
     const respond = vi.fn<AgentResponder['respond']>(async function* () {
       yield { event: 'agent.delta', data: { text: 'Olá' } };
     });
@@ -233,6 +233,7 @@ describe('idempotência e ordenação', () => {
     const clientMessageId = randomUUID();
 
     const first = parseSse((await send(h, token, id, 'Preciso de ajuda', clientMessageId)).text);
+    h.conversations.markAnswered((first[0]?.data.message as { id: string }).id);
     const second = parseSse((await send(h, token, id, 'Preciso de ajuda', clientMessageId)).text);
 
     expect(second.map((e) => e.event)).toEqual(['message.accepted', 'done']); // sem nova resposta do agente
@@ -241,6 +242,39 @@ describe('idempotência e ordenação', () => {
     const conversation = await history(h, token, id);
     expect(conversation.messages).toHaveLength(1);
     expect(conversation.employeeMessageCount).toBe(1);
+    expect(conversation.pendingAgentResponse).toBeNull();
+  });
+
+  it('reenviar mensagem ainda sem resposta retoma o agente, sem duplicar a mensagem nem consumir o limite', async () => {
+    const respond = vi.fn<AgentResponder['respond']>(async function* () {});
+    const h = await buildHarness({ responder: { respond } });
+    const token = await h.login(ANA);
+    const id = await startConversation(h, token);
+    const clientMessageId = randomUUID();
+
+    await send(h, token, id, 'Preciso de ajuda', clientMessageId);
+    const pending = await history(h, token, id);
+    expect(pending.pendingAgentResponse).toEqual({ messageId: pending.messages[0]?.id });
+
+    await send(h, token, id, 'Preciso de ajuda', clientMessageId);
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[1]?.[0].message.id).toBe(pending.messages[0]?.id);
+    const after = await history(h, token, id);
+    expect(after.messages).toHaveLength(1);
+    expect(after.employeeMessageCount).toBe(1);
+  });
+
+  it('reenviar mensagem antiga não aciona o agente: só a última mensagem pode estar pendente', async () => {
+    const respond = vi.fn<AgentResponder['respond']>(async function* () {});
+    const h = await buildHarness({ responder: { respond } });
+    const token = await h.login(ANA);
+    const id = await startConversation(h, token);
+    const older = randomUUID();
+    await send(h, token, id, 'primeira', older);
+    await send(h, token, id, 'segunda');
+    respond.mockClear();
+    await send(h, token, id, 'primeira', older);
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it('o mesmo clientMessageId com outro texto devolve a mensagem original, sem sobrescrever', async () => {
@@ -495,5 +529,59 @@ describe('isolamento entre funcionários', () => {
     const res = await send(h, ana, anasId, 'Mensagem da Ana', shared);
     expect((parseSse(res.text)[0]?.data.message as { content: string }).content).toBe('Mensagem da Ana');
     expect(res.text).not.toContain('Segredo do Bruno');
+  });
+});
+
+describe('POST /api/conversations/:id/resume', () => {
+  const resume = (h: Harness, token: string, id: string) => request(h.app).post(`/api/conversations/${id}/resume`).set(bearer(token));
+
+  it('retoma a resposta pendente: o agente recebe a última mensagem do funcionário', async () => {
+    const respond = vi.fn<AgentResponder['respond']>(async function* () {
+      yield { event: 'agent.step', data: { step: { kind: 'listMyTickets', label: 'consultou seus chamados', status: 'OK' } } } satisfies ChatStreamEvent;
+    });
+    const h = await buildHarness({ responder: { respond } });
+    const token = await h.login(ANA);
+    const id = await startConversation(h, token);
+    await send(h, token, id, 'Meus chamados?');
+    respond.mockClear();
+
+    const res = await resume(h, token, id);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(parseSse(res.text).map((e) => e.event)).toEqual(['agent.step', 'done']);
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond.mock.calls[0]?.[0]).toMatchObject({ user: { id: ANA.id }, message: { content: 'Meus chamados?' } });
+  });
+
+  it('sem pendência, só encerra o stream; conversa fora do agente informa o estado', async () => {
+    const respond = vi.fn<AgentResponder['respond']>(async function* () {});
+    const h = await buildHarness({ responder: { respond } });
+    const token = await h.login(ANA);
+    const id = await startConversation(h, token);
+    expect(parseSse((await resume(h, token, id)).text).map((e) => e.event)).toEqual(['done']);
+
+    await send(h, token, id, 'Oi');
+    h.conversations.setStatus(id, 'WAITING_ANALYST');
+    respond.mockClear();
+    const events = parseSse((await resume(h, token, id)).text);
+    expect(events.map((e) => e.event)).toEqual(['conversation.status', 'done']);
+    expect(events[0]?.data).toMatchObject({ status: 'WAITING_ANALYST' });
+    expect(respond).not.toHaveBeenCalled();
+    expect((await history(h, token, id)).pendingAgentResponse).toBeNull();
+  });
+
+  it('conversa de outra pessoa: 404 antes de abrir o stream; analista: 403', async () => {
+    const respond = vi.fn<AgentResponder['respond']>(async function* () {});
+    const h = await buildHarness({ responder: { respond } });
+    const ana = await h.login(ANA);
+    const id = await startConversation(h, ana);
+    await send(h, ana, id, 'Oi');
+    respond.mockClear();
+
+    const foreign = await resume(h, await h.login(BRUNO), id);
+    expect(foreign.status).toBe(404);
+    expect(errorOf(foreign).code).toBe('NOT_FOUND');
+    expect((await resume(h, await h.login(MARCOS), id)).status).toBe(403);
+    expect(respond).not.toHaveBeenCalled();
   });
 });

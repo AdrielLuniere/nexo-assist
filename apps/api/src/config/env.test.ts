@@ -56,3 +56,16 @@ describe('loadEnv', () => {
     }
   });
 });
+
+describe('configuração do agente', () => {
+  it('AGENT_MODEL é opcional (vazio conta como ausente) e os limites têm padrão', () => {
+    const env = loadEnv({ DATABASE_URL, AGENT_MODEL: '' });
+    expect(env.AGENT_MODEL).toBeUndefined();
+    expect(env).toMatchObject({ AGENT_TIMEOUT_MS: 45_000, AGENT_MAX_CONCURRENCY: 4 });
+  });
+
+  it('aceita provedor/modelo e recusa outro formato', () => {
+    expect(loadEnv({ DATABASE_URL, AGENT_MODEL: 'anthropic/claude-haiku-5-5' }).AGENT_MODEL).toBe('anthropic/claude-haiku-5-5');
+    expect(() => loadEnv({ DATABASE_URL, AGENT_MODEL: 'claude-haiku' })).toThrow(/AGENT_MODEL/);
+  });
+});

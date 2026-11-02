@@ -7,7 +7,7 @@ técnicas tomadas até aqui. As fases (P0.1, P0.2, P0.3) aparecem nos comentári
 
 ```
 apps/web  ──HTTP/SSE──▶  apps/api  ──▶  packages/agent (Mastra)
-(React)                  (Express)        │ só fala por portas (AgentToolPorts)
+(React)                  (Express)        │ só lê por portas (AgentReadPorts)
                             │             ▼
                             ├──────▶  packages/ticket-service  (sistema de chamados simulado)
                             │
@@ -19,7 +19,7 @@ apps/web  ──HTTP/SSE──▶  apps/api  ──▶  packages/agent (Mastra)
 | --- | --- | --- |
 | `packages/shared` | Tipos de domínio, schemas Zod, contratos HTTP, parâmetros das regras do Anexo A | nenhum pacote interno, Prisma, Express, Mastra |
 | `packages/ticket-service` | Contrato e regras do sistema de chamados "legado": privacidade, duplicidade, reabertura, prazos | agente, API, web, Prisma, Express, Mastra |
-| `packages/agent` | Agente Mastra: instruções, catálogo de ferramentas, portas | serviço de chamados, API, web, Prisma, Express |
+| `packages/agent` | Agente Mastra: instruções, ferramentas, política determinística, execução de uma resposta | serviço de chamados, API, web, Prisma, Express |
 | `apps/api` | Raiz de composição: autenticação, persistência, orquestração, streaming | — |
 | `apps/web` | Chat do funcionário e console do analista | qualquer pacote interno além de `@nexo/shared` |
 
@@ -29,17 +29,19 @@ em [`tests/prisma-contracts.test.ts`](../tests/prisma-contracts.test.ts).
 
 ### Por que o agente não acessa o banco
 
-O agente só age por `AgentToolPorts` ([`ports.ts`](../packages/agent/src/ports.ts)). A API cria
-as portas **por requisição**, já vinculadas ao funcionário autenticado e à conversa. Nenhuma
-ferramenta recebe `employeeId`, então o modelo não consegue pedir dados de outra pessoa, mesmo
-sob prompt injection. A privacidade não depende do prompt.
+O agente só lê por `AgentReadPorts` ([`ports.ts`](../packages/agent/src/ports.ts)). A API cria
+as portas **por resposta**, já vinculadas ao funcionário autenticado
+([`agent-ports.ts`](../apps/api/src/agent/agent-ports.ts)). Nenhuma ferramenta recebe `employeeId`
+(argumentos extras são descartados na validação), então o modelo não consegue pedir dados de outra
+pessoa, mesmo sob prompt injection. A privacidade não depende do prompt.
 
 ### Por que o agente não escreve chamados
 
-As ferramentas de "escrita" do agente (`proposeTicketDraft`, `requestHandoff`) apenas registram
-um rascunho ou uma transferência. A escrita no serviço de chamados só acontece quando o
-funcionário confirma o rascunho pela API (`POST .../drafts/:draftId/confirm`), e o serviço exige
-um `confirmedDraftId`. Isso implementa a regra "só cria ou atualiza depois da confirmação" em código.
+As ferramentas de "escrita" do agente (`proposeTicketDraft`, `requestHandoff`) não gravam nada:
+validam e **planejam** o efeito, que a API grava junto com a resposta (ver "Agente"). O rascunho
+nasce `PENDING`; a escrita no serviço de chamados só acontece quando o funcionário confirma pela API
+(`POST .../drafts/:draftId/confirm`), e o serviço exige um `confirmedDraftId`. Isso implementa a regra
+"só cria ou atualiza depois da confirmação" em código.
 
 ## Persistência
 
@@ -140,9 +142,107 @@ de mensagens (`message-writer.ts`). Usa as tabelas que já existiam (`conversati
   responder. A mudança de estado em si (transferir, assumir, devolver, encerrar) é do console e do
   agente, em fases futuras.
 - **Porta do agente.** `AgentResponder` devolve eventos de streaming; a rota só a aciona para
-  mensagem nova em conversa `WITH_AGENT`. `noAgentResponder` é o padrão enquanto o agente não existe.
+  mensagem ainda sem resposta em conversa `WITH_AGENT`. A implementação real é da P0.5 (abaixo);
+  `noAgentResponder` segue como padrão quando nenhum respondedor é injetado (testes).
 - **Dado corrompido não derruba.** Blocos de mensagem que não validam são lidos como lista vazia (o
   texto da mensagem permanece).
+
+## Agente (P0.5)
+
+Pacote [`packages/agent`](../packages/agent/src) (Mastra, sem banco) e orquestração em
+[`apps/api/src/agent/`](../apps/api/src/agent).
+
+```
+POST .../messages ou .../resume
+  └─ AgentResponder (fila por conversa + teto global, com prazo de espera)
+       ├─ já respondida? devolve a resposta gravada (sem modelo)
+       ├─ conversa fora de WITH_AGENT? não chama o modelo
+       ├─ runAgentTurn (packages/agent): Mastra + ferramentas, SÓ LEITURA
+       │     ferramentas registram passos reais (TurnTrace) → agent.step em tempo real
+       │     submitResponse → proposta do modelo
+       │     finalizeTurn (policy.ts) → decisão final, rascunho e transferência planejados
+       └─ publish (uma transação, conversa travada)
+             revalida estado → rascunho PENDING + Handoff + mensagem + AgentDecision
+```
+
+**Por que nada é gravado durante a execução.** Uma resposta pode falhar em qualquer ponto (provedor,
+tempo, queda do processo). Se as ferramentas gravassem rascunho ou transferência na hora, uma falha
+deixaria efeitos sem a mensagem que os explica, e a retentativa duplicaria. Planejando os efeitos e
+gravando tudo de uma vez: falha antes da publicação = nada gravado, mensagem pendente; publicação =
+tudo ou nada. `agent_decisions.triggerMessageId` (único, migration `20261102000000`) e a trava da
+conversa garantem uma publicação por mensagem, mesmo entre processos.
+
+**Revalidação antes de publicar.** A transação confere de novo o estado da conversa. Se ela saiu de
+`WITH_AGENT` durante a execução (transferida, assumida, encerrada), a resposta é descartada: o agente
+nunca fala depois da transferência.
+
+**Recuperação.** Mensagem pendente = a última mensagem do funcionário sem decisão. Aparece em
+`pendingAgentResponse` e é retomada por `POST .../resume` ou pelo reenvio do mesmo
+`clientMessageId`. A retomada é sob demanda (quando o funcionário volta à conversa): não há
+reprocessamento automático em segundo plano, para não gastar modelo sem ninguém esperando.
+
+**Ferramentas** ([`tools.ts`](../packages/agent/src/tools.ts)): argumentos validados por Zod (inválido
+volta ao modelo como erro e ele corrige), falhas das portas viram mensagem genérica (nada interno chega
+ao modelo), cada execução vira um passo com status, resumo e duração. Regras aplicadas em código:
+
+| Ferramenta | Regra garantida em código |
+| --- | --- |
+| `getMyTicket` | inexistente e alheio são iguais: "não está entre os seus" (`A.PRIVACIDADE`) |
+| `proposeTicketDraft` CREATE | todos os campos do Anexo A obrigatórios; prioridade **calculada** por `classifyPriority` (impacto × urgência), não escolhida pelo modelo; verificação de duplicidade automática: com chamado aberto parecido, recusa e orienta atualizar |
+| `proposeTicketDraft` UPDATE | só chamado próprio e aberto; resolvido orienta reabrir |
+| `proposeTicketDraft` REOPEN | só `RESOLVED` dentro de 7 dias (mesma conta do serviço de chamados) |
+| `requestHandoff` | chamado relacionado precisa ser do funcionário; "chamado vencido" exige chamado de fato vencido |
+
+O serviço de chamados repete as mesmas validações na confirmação: o agente não é a última barreira.
+
+**Política determinística** ([`policy.ts`](../packages/agent/src/policy.ts)), aplicada a toda
+resposta sobre a proposta do modelo (`submitResponse`):
+
+1. Intenção fora de TI → `REDIRECT_OUT_OF_SCOPE`; rascunho é descartado (contradição, confiança ≤ 0,5).
+2. Ação precisa de evidência: com rascunho válido a ação é a do rascunho; rascunho declarado sem
+   rascunho, "central de ajuda" sem artigo encontrado ou cards sem chamados consultados viram `REPLY`
+   com confiança limitada a 0,7.
+3. Cards e seleção só com chamados devolvidos pelas ferramentas nesta resposta (outros são omitidos).
+4. Transferência obrigatória (se o modelo não fez, a política faz e acrescenta um aviso ao texto):
+   pedido do funcionário (`TALK_TO_ANALYST`), rascunho com prioridade Crítica, confiança final < 0,6.
+5. Chamado vencido exibido sem transferência → opção rápida "Chamar um analista" (Tela 3).
+
+Cada correção entra na justificativa ("Ajustes automáticos: ...") e as regras aplicadas em `ruleRefs`
+(as citadas pelo modelo só entram se existirem).
+
+**Critérios de confiança.** O modelo estima a confiança na **ação** com uma escala nas instruções
+(≥ 0,9 pedido claro e confirmado pelas ferramentas; 0,7–0,89 com suposição razoável; 0,6–0,69
+ambiguidade com ação segura, como perguntar; < 0,6 não sabe o que fazer). A política só reduz (nunca
+aumenta) e o nível é derivado: `HIGH` ≥ 0,8, `MEDIUM` ≥ 0,6, `LOW` abaixo, que transfere.
+Perguntar o que falta é uma ação segura; por isso falta de informação não gera transferência.
+
+**Explicabilidade sem raciocínio privado.** A decisão registra o que o modelo entregou como
+justificativa objetiva (1–2 frases) e os fatos das ferramentas; não pedimos nem guardamos cadeia de
+raciocínio. Os passos exibidos vêm do que rodou de fato, não do texto do modelo.
+
+**Modelo e custo.** `AGENT_MODEL` (`provedor/modelo`, model router do Mastra; padrão sugerido
+`anthropic/claude-haiku-5-5`), chave na variável do provedor. Por resposta: `toolChoice: required` (toda
+etapa termina em ferramenta; texto solto não é resposta), até 6 chamadas ao modelo, 8 ferramentas,
+1.500 tokens de saída por chamada, 1 retentativa do provedor, 45 s no total, últimas 24 mensagens de
+histórico. Memória do Mastra não é usada: o histórico vem do banco, a fonte de verdade.
+
+**Concorrência.** Uma resposta por conversa de cada vez (na ordem) e até `AGENT_MAX_CONCURRENCY` (4)
+respostas simultâneas por processo; esperar mais de 20 s numa dessas filas, ou mais de 10 s pelas
+vagas de escrita no banco, desiste com 503 repetível (`BusyError`) em vez de acumular requisições. A
+execução não depende da conexão: se o cliente sai, a resposta é gravada mesmo assim.
+
+**Limitações conhecidas.**
+
+- Sem streaming do texto (`agent.delta`): a resposta é estruturada e chega inteira; o tempo real
+  está nos passos.
+- Sem resumo de conversas longas (`conversations.summary` não é usado); a janela de 24 mensagens
+  cobre a sessão de 30 mensagens na prática.
+- Busca na central de ajuda por palavras (sem sinônimos ou semântica).
+- A qualidade da classificação (intenção, tipo, categoria, urgência) depende do modelo; as regras de
+  segurança e o cálculo de prioridade não. A avaliação com o modelo real (`npm run test:live`) existe,
+  mas não roda sem chave.
+- Assumir, devolver e encerrar (console) ainda não existem: a conversa transferida fica em
+  `WAITING_ANALYST` até a fase do console.
 
 ## Regras
 
@@ -159,7 +259,10 @@ onde o PRD não especifica).
 | Limite de mensagens | [PRD] | 30 mensagens do funcionário por sessão |
 | Status "aberto" para duplicidade | [Decisão] | `WAITING_ANALYST`, `IN_PROGRESS`, `APPROVED` |
 | Status reabríveis | [PRD] | `RESOLVED` (dentro da janela) |
-| Confiança mínima para agir | [Decisão] | 0,6; abaixo disso a regra "agent sem segurança" transfere (calibrar na P0.3) |
+| Confiança mínima para agir | [Decisão] | 0,6; abaixo disso a regra "agent sem segurança" transfere automaticamente (P0.5) |
+| Caso crítico | [PRD] | rascunho com prioridade Crítica transfere para analista na mesma resposta |
+| Chamado vencido | [Decisão] | do protótipo (Tela 3): o agente **oferece** chamar um analista; transfere se o funcionário aceitar |
+| Rascunhos pendentes | [Decisão] | no máximo um por conversa; um novo marca o anterior como `SUPERSEDED` |
 | Formato do código do chamado | [Decisão] | `INC-20311`, `REQ-10442` (como no Anexo B) |
 | Classificação de prioridade | [Decisão] | `classifyPriority`: bloqueado + equipe/empresa = Crítica; bloqueado + 1 pessoa ou compromisso no dia = Alta; com alternativa = Média; sem urgência = Baixa |
 | Crítica exige equipe ou empresa | [Decisão] | do Anexo A ("parado para uma equipe ou para a empresa"); o serviço recusa Crítica para 1 pessoa |
@@ -175,11 +278,32 @@ código no serviço de chamados e na API. As instruções do agente
 ## Transparência das decisões
 
 Cada resposta do agente gera um `AgentDecision`
-([`agent-decision.ts`](../packages/shared/src/domain/agent-decision.ts)): intenção entendida,
-paráfrase, ação, confiança (0..1 e nível), justificativa, regras do Anexo A citadas
-(`A.DUPLICIDADE`, `A.PRIORIDADE_PRAZO`…), passos executados com rótulo legível
-("consultou seus chamados") e telemetria de custo (modelo, tokens, latência). A interface mostra
-os passos acima da resposta e o detalhe ao expandir.
+([`agent-decision.ts`](../packages/shared/src/domain/agent-decision.ts)), gravado com a mensagem e
+ligado a ela (`messageId`) e à mensagem do funcionário que a disparou (`triggerMessageId`): intenção
+entendida, paráfrase, ação, confiança (0..1 e nível), justificativa, regras do Anexo A aplicadas
+(`A.DUPLICIDADE`, `A.PRIORIDADE_PRAZO`…), passos executados com rótulo legível ("consultou seus
+chamados"), status, resumo do resultado e duração, e telemetria (modelo, tokens de entrada e saída,
+latência). Exemplo real, gerado pelo agente com o provedor simulado (por isso o `model`):
+
+```json
+{
+  "intent": "CHECK_TICKET_STATUS",
+  "understanding": "Quer saber do chamado do notebook lento.",
+  "action": "SHOW_TICKETS",
+  "confidence": 0.92,
+  "confidenceLevel": "HIGH",
+  "rationale": "A consulta mostrou o INC-20311 aguardando analista e vencido.",
+  "ruleRefs": ["A.TRANSFERENCIA", "A.PRIORIDADE_PRAZO"],
+  "steps": [
+    { "kind": "listMyTickets", "label": "consultou seus chamados", "status": "OK",
+      "summary": "2 chamado(s): INC-20311, REQ-10442; 1 com prazo vencido.", "durationMs": 1 }
+  ],
+  "model": "teste/roteirizado", "inputTokens": 240, "outputTokens": 60, "latencyMs": 383
+}
+```
+
+A resposta desse exemplo também ganhou, pela política, a opção rápida "Chamar um analista" (chamado
+vencido). A interface (fase futura) mostra os passos acima da resposta e o detalhe ao expandir.
 
 ## Erros e observabilidade
 
@@ -192,8 +316,11 @@ os passos acima da resposta e o detalhe ao expandir.
 
 ## Testes
 
-- `npm test`: unitários, de arquitetura e HTTP, sem banco (serviços sobre repositórios em memória; a
-  API é exercitada com supertest).
+- `npm test`: unitários, de arquitetura e HTTP, sem banco (serviços sobre repositórios em memória).
+  Inclui o agente: o Mastra roda de verdade com um **provedor de LLM simulado**
+  ([`scripted-model.ts`](../packages/agent/src/testing/scripted-model.ts), exportado como
+  `@nexo/agent/testing`), que implementa a interface de modelo do AI SDK e devolve chamadas de
+  ferramenta roteirizadas. Ferramentas, validação, política, limites e telemetria são o código real.
 - Os testes de API usam um cliente fino sobre `fetch` ([`tests/helpers/http.ts`](../tests/helpers/http.ts),
   mesma sintaxe do supertest) e servem cada app em um único servidor (`serve` em
   `tests/helpers/api-harness.ts`).
@@ -208,4 +335,11 @@ os passos acima da resposta e o detalhe ao expandir.
   arquivo cria um banco descartável
   (`nexo_test_<aleatório>`) no servidor local, aplica a migration nele com `prisma migrate deploy`,
   roda o seed e remove o banco ao final. O banco do `.env` nunca é tocado.
+  [`agent.integration.test.ts`](../tests/agent.integration.test.ts) cobre o agente de ponta a ponta
+  (rota SSE, ferramentas sobre o seed, publicação, confirmação, recuperação, retomadas simultâneas em
+  dois "processos", transferência e descarte após assumir).
+- `npm run test:live`: cenários do PRD contra o modelo **real**; fora das outras suítes e só com
+  `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor. Nenhum teste automatizado usa credencial real.
+- CI em Linux: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) roda typecheck, `npm test`,
+  build e `test:db` com PostgreSQL 17 do próprio job.
 

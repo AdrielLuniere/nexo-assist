@@ -47,8 +47,10 @@ export const SendMessageRequestSchema = z.object({
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
 
 /**
- * Eventos SSE de `POST /api/conversations/:id/messages` (resposta em tempo real).
- * Ordem típica: message.accepted → agent.step* → agent.delta* → agent.message → done.
+ * Eventos SSE de `POST /api/conversations/:id/messages` e `.../resume` (resposta em tempo real).
+ * Ordem típica: message.accepted → agent.step* → agent.delta* → agent.message → [conversation.status] → done.
+ * `message.accepted` só existe no envio; `conversation.status` aparece quando o agente transfere a
+ * conversa ou quando ela já não está com o agente.
  */
 export const ChatStreamEventSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('message.accepted'), data: z.object({ message: MessageSchema }) }),
@@ -220,6 +222,14 @@ export const API_ROUTES = {
     response: 'sse',
     summary: 'Envia mensagem; resposta do agente em streaming (ChatStreamEvent).',
     body: SendMessageRequestSchema,
+  },
+  resumeAgentResponse: {
+    method: 'POST',
+    path: '/api/conversations/:conversationId/resume',
+    auth: 'employee',
+    status: 'implemented',
+    response: 'sse',
+    summary: 'Retoma a resposta pendente do agente (idempotente; sem pendência, só encerra o stream).',
   },
   conversationEvents: {
     method: 'GET',

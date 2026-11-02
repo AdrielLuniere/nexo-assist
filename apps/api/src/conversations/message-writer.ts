@@ -1,4 +1,4 @@
-import { type Message, MessageBlockSchema } from '@nexo/shared';
+import { type AgentDecision, AgentStepSchema, type Message, MessageBlockSchema, confidenceLevelOf } from '@nexo/shared';
 import { z } from 'zod';
 import { Prisma } from '../generated/prisma/client.js';
 
@@ -9,10 +9,12 @@ import { Prisma } from '../generated/prisma/client.js';
  */
 
 const BlocksSchema = z.array(MessageBlockSchema);
+const StepsSchema = z.array(AgentStepSchema);
 
 type Tx = Prisma.TransactionClient;
 export type ConversationRow = Prisma.ConversationGetPayload<object>;
 type MessageRow = Prisma.MessageGetPayload<{ include: { decision: { select: { id: true } } } }>;
+type DecisionRow = Prisma.AgentDecisionGetPayload<object>;
 
 export const MESSAGE_INCLUDE = { decision: { select: { id: true } } } as const;
 
@@ -27,6 +29,30 @@ export function toContractMessage(row: Omit<MessageRow, 'clientMessageId'> & { c
     content: row.content,
     blocks: blocks.success ? blocks.data : [],
     decisionId: row.decision?.id ?? null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** Converte a decisão do agente no contrato. Passos corrompidos não derrubam o histórico. */
+export function toContractDecision(row: DecisionRow): AgentDecision {
+  const steps = StepsSchema.safeParse(row.steps);
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    messageId: row.messageId,
+    triggerMessageId: row.triggerMessageId,
+    intent: row.intent,
+    understanding: row.understanding,
+    action: row.action,
+    confidence: row.confidence,
+    confidenceLevel: confidenceLevelOf(row.confidence),
+    rationale: row.rationale,
+    ruleRefs: row.ruleRefs,
+    steps: steps.success ? steps.data : [],
+    model: row.model,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    latencyMs: row.latencyMs,
     createdAt: row.createdAt.toISOString(),
   };
 }

@@ -1,0 +1,49 @@
+# Validação em Linux: tipos, testes determinísticos, build e integração com PostgreSQL descartável.
+# Não usa chave de LLM: o agente é testado com um provedor simulado (`npm run test:live` fica de fora).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: nexo
+          POSTGRES_PASSWORD: nexo
+          POSTGRES_DB: nexo_assist
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U nexo -d nexo_assist"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Banco efêmero do próprio job. Os testes de integração criam e removem bancos `nexo_test_*` nele.
+      DATABASE_URL: postgresql://nexo:nexo@127.0.0.1:5434/nexo_assist
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:db

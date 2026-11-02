@@ -32,6 +32,8 @@ export const AgentDecisionSchema = z.object({
   conversationId: IdSchema,
   /** Mensagem do agente produzida por esta decisão. */
   messageId: IdSchema.nullable(),
+  /** Mensagem do funcionário que a decisão respondeu (no máximo uma decisão por mensagem). */
+  triggerMessageId: IdSchema.nullable(),
   intent: AgentIntentSchema,
   /** Paráfrase curta do que o agente entendeu. */
   understanding: z.string().min(1).max(500),

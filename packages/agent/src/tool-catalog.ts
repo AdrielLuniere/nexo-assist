@@ -2,8 +2,8 @@
  * Catálogo das ferramentas do agente. O `label` é o texto exibido acima da resposta
  * ("consultou seus chamados"), conforme o protótipo.
  *
- * `writes: true` não significa que o agente escreve no sistema de chamados: essas ferramentas
- * apenas registram um rascunho ou uma transferência. A escrita em chamados só acontece
+ * `writes: true` não significa que o agente escreve: essas ferramentas só PLANEJAM um rascunho ou
+ * uma transferência, que a API grava junto com a resposta. A escrita em chamados só acontece
  * quando o funcionário confirma o rascunho pela API.
  */
 export const AGENT_TOOLS = {

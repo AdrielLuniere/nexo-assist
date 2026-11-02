@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { createAgentResponder } from './agent/agent-responder.js';
+import { createPrismaAgentTurnStore } from './agent/agent-turn-store.js';
+import { createPrismaHelpCenter } from './agent/help-center.js';
 import { createAuthService } from './auth/auth-service.js';
 import { createPrismaUserRepository } from './auth/user-repository.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
@@ -18,6 +21,13 @@ import { logger } from './infra/logger.js';
 const rootEnvFile = fileURLToPath(new URL('../../../.env', import.meta.url));
 if (existsSync(rootEnvFile)) process.loadEnvFile(rootEnvFile);
 
+/** Variável da chave dos provedores mais comuns (o Mastra lê a chave do ambiente na hora da chamada). */
+const PROVIDER_KEYS: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+};
+
 function main(): void {
   const env = loadEnv();
   const prisma = createPrismaClient(env.DATABASE_URL);
@@ -28,6 +38,24 @@ function main(): void {
     logger.warn('AUTH_SECRET ausente: usando segredo efêmero; as sessões não sobrevivem a um reinício.', {});
   }
   const tickets = createLegacyTicketService(prisma);
+
+  const agentModel = env.AGENT_MODEL ?? null;
+  if (!agentModel) {
+    logger.warn('AGENT_MODEL ausente: as mensagens são gravadas, mas o agente não responde (AGENT_UNAVAILABLE).', {});
+  } else {
+    const keyVar = PROVIDER_KEYS[agentModel.split('/')[0] ?? ''];
+    if (keyVar && !process.env[keyVar]) logger.warn('Chave do provedor do modelo ausente; as respostas do agente vão falhar.', { model: agentModel, variable: keyVar });
+  }
+  const responder = createAgentResponder({
+    store: createPrismaAgentTurnStore(prisma),
+    tickets,
+    helpCenter: createPrismaHelpCenter(prisma),
+    model: agentModel,
+    modelId: agentModel ?? 'nenhum',
+    limits: { timeoutMs: env.AGENT_TIMEOUT_MS },
+    maxConcurrentRuns: env.AGENT_MAX_CONCURRENCY,
+    logger,
+  });
 
   const app = createApp({
     checkDatabase: createDatabaseCheck(prisma, env.HEALTH_DB_TIMEOUT_MS),
@@ -43,6 +71,7 @@ function main(): void {
       tickets,
       conversations: createConversationService({ conversations: createPrismaConversationRepository(prisma) }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(prisma), tickets }),
+      responder,
     },
   });
 

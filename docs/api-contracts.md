@@ -19,7 +19,8 @@ schemas Zod usados pela API (validação) e pela web (parsing). Este documento �
 | GET | `/api/conversations` | funcionário | JSON | **implementada** | Conversas do funcionário (continuar de onde parou) |
 | POST | `/api/conversations` | funcionário | JSON | **implementada** | Nova conversa |
 | GET | `/api/conversations/:conversationId` | funcionário | JSON | **implementada** | Histórico com decisões do agente |
-| POST | `/api/conversations/:conversationId/messages` | funcionário | SSE | **implementada** (sem agente) | Grava a mensagem e abre o stream; o agente responde em fase futura |
+| POST | `/api/conversations/:conversationId/messages` | funcionário | SSE | **implementada** | Grava a mensagem e transmite a resposta do agente |
+| POST | `/api/conversations/:conversationId/resume` | funcionário | SSE | **implementada** | Retoma a resposta pendente do agente (idempotente) |
 | GET | `/api/conversations/:conversationId/events` | funcionário | SSE | planejada | Mensagens do analista e mudanças de estado |
 | POST | `/api/conversations/:conversationId/drafts/:draftId/confirm` | funcionário | JSON | **implementada** | Confirma o rascunho e escreve no serviço de chamados (idempotente) |
 | POST | `/api/conversations/:conversationId/drafts/:draftId/discard` | funcionário | JSON | **implementada** | Descarta o rascunho |
@@ -33,10 +34,11 @@ schemas Zod usados pela API (validação) e pela web (parsing). Este documento �
 | POST | `/api/console/conversations/:conversationId/close` | analista | JSON | planejada | Encerra |
 | POST | `/api/console/conversations/:conversationId/messages` | analista | JSON | planejada | Mensagem do analista |
 
-Continuam **planejadas**: `GET /api/conversations/:id/events` (mensagens do analista), transferência
-para analista e todo o console do analista. A consulta de duplicidades não é uma rota: está prevista
-só no serviço (`findPossibleDuplicates`) e é usada pelo agente em fase futura; a criação já recusa
-duplicados (`DUPLICATE_TICKET`).
+Continuam **planejadas**: `GET /api/conversations/:id/events` (mensagens do analista), a rota em que o
+funcionário pede um analista diretamente (`POST .../handoff`) e todo o console do analista. A
+transferência **pelo agente** já existe (ver "Transferência"). A consulta de duplicidades não é uma
+rota: é a ferramenta `findDuplicateTickets` do agente, sobre `findPossibleDuplicates` do serviço; a
+criação também recusa duplicados (`DUPLICATE_TICKET`).
 
 Não existe rota de escrita direta de chamados (`POST/PUT/PATCH/DELETE /api/tickets`): chamados só
 são criados, atualizados ou reabertos pela confirmação de um rascunho.
@@ -54,6 +56,8 @@ identificador de funcionário, papel ou autor vindo do cliente é lido.
   ou duas abas não geram conversas vazias duplicadas.
 - `GET /api/conversations/:id` devolve a conversa com todas as mensagens (em ordem de envio) e as
   decisões do agente. É o que permite "voltar outro dia e continuar de onde parou".
+  `pendingAgentResponse` (`{ messageId }` ou `null`) indica a última mensagem do funcionário ainda sem
+  resposta do agente; só existe com a conversa em `WITH_AGENT`.
 - O título da conversa é a primeira mensagem do funcionário (até 60 caracteres, sem IA).
 
 ### Enviar mensagem (`POST .../messages`)
@@ -73,26 +77,30 @@ Tudo que pode falhar é decidido **antes** de abrir o stream, então vira um err
 Se a mensagem é aceita, a resposta é `text/event-stream` com eventos `ChatStreamEvent`:
 
 ```
-message.accepted → [conversation.status] → [agent.step* → agent.delta* → agent.message] → [error] → done
+message.accepted → [conversation.status] → [agent.step* → agent.message → [conversation.status]] → [error] → done
 ```
 
 - `message.accepted` traz a mensagem gravada (a do funcionário, com `id` e `createdAt` do servidor).
 - `conversation.status` só aparece quando a conversa **não** está com o agente (`WAITING_ANALYST` ou
   `WITH_ANALYST`): a mensagem é gravada para o analista ler, o agente não responde, e a interface
   fica sabendo.
-- Os eventos do agente só existem quando o agente responde: conversa `WITH_AGENT` e mensagem nova.
-  **Nesta fase não há agente**, então o stream termina em `message.accepted → done`. A porta
-  `AgentResponder` (`apps/api/src/conversations/responder.ts`) é onde o agente se liga depois; cada
-  evento que ele devolve é validado contra o contrato antes de sair.
-- Falha do agente depois de aberto o stream vira o evento `error` (`AGENT_UNAVAILABLE`, repetível,
-  sem detalhes internos) seguido de `done`. A mensagem do funcionário continua gravada.
+- Os eventos do agente só existem quando o agente responde: conversa `WITH_AGENT` e mensagem ainda
+  sem resposta. `agent.step` chega a cada ferramenta concluída; `agent.message` traz a mensagem do
+  agente e a decisão (`AgentDecision`) já gravadas. Se o agente transferiu a conversa, segue um
+  `conversation.status` com `WAITING_ANALYST`. Cada evento é validado contra o contrato antes de sair.
+- Falha do agente depois de aberto o stream vira o evento `error` seguido de `done`, sem detalhes
+  internos: `AGENT_UNAVAILABLE` (modelo indisponível, tempo esgotado, resposta inválida, agente não
+  configurado ou fila cheia) ou `DATABASE_UNAVAILABLE`, ambos repetíveis. A mensagem do funcionário
+  continua gravada e fica **pendente** (ver "Retomar resposta pendente").
+- Se o cliente desconecta no meio, a resposta termina e é gravada mesmo assim; aparece ao reabrir.
 
 Regras garantidas no servidor:
 
 - **Idempotência por `clientMessageId`** (único por conversa). Reenviar devolve a mensagem original,
-  com o texto original (mesmo que o novo texto seja diferente), sem consumir o limite e sem acionar o
-  agente de novo. O mesmo `clientMessageId` em outra conversa, ou de outro funcionário, é uma
-  mensagem nova.
+  com o texto original (mesmo que o novo texto seja diferente), sem consumir o limite. O agente só é
+  acionado de novo se aquela mensagem ainda for a resposta pendente (é a retomada); mensagem já
+  respondida, ou que não é a última do funcionário, não aciona nada. O mesmo `clientMessageId` em
+  outra conversa, ou de outro funcionário, é uma mensagem nova.
 - **Limite de 30 mensagens do funcionário por conversa** ("sessão" = conversa). Vale sob concorrência:
   40 envios simultâneos aceitam exatamente 30. Mensagens do agente e do analista não contam.
 - **Ordenação estável:** as escritas de uma conversa são serializadas e `createdAt` é estritamente
@@ -152,6 +160,39 @@ Mapeamento dos erros do serviço de chamados (`TicketServiceError`) para a API:
 | `INVALID_INPUT` | `VALIDATION_ERROR` | 400 |
 | `UNAVAILABLE` (após as tentativas) | `TICKET_SERVICE_UNAVAILABLE` | 503 |
 
+### Retomar resposta pendente (`POST .../resume`)
+
+Se a mensagem foi gravada mas o agente não respondeu (provedor fora, tempo esgotado, servidor
+reiniciado), `GET /api/conversations/:id` mostra `pendingAgentResponse`. `POST
+/api/conversations/:id/resume` (sem corpo) abre o mesmo stream de `messages`, sem `message.accepted`:
+
+- com pendência: o agente responde à última mensagem do funcionário;
+- já respondida (ex.: outra aba retomou antes): devolve a resposta gravada, sem chamar o modelo;
+- sem pendência: só `done`; conversa fora do agente: `conversation.status` e `done`.
+
+Conversa inexistente ou de outra pessoa: `404` antes de abrir o stream; analista: `403`.
+
+**Sem duplicar.** O agente não grava nada enquanto executa; tudo (mensagem, decisão, rascunho,
+transferência) é gravado numa única transação, com a conversa travada e no máximo uma decisão por
+mensagem do funcionário (`agent_decisions.triggerMessageId` é único). Retomadas simultâneas, inclusive
+em processos diferentes, publicam uma única resposta; as demais devolvem a mesma.
+
+### Transferência
+
+O agente transfere quando o funcionário pede, em caso crítico, em chamado vencido (a pedido) ou com
+confiança abaixo de 0,6. Na mesma transação da resposta: cria o `Handoff` (`WAITING`, com o resumo do
+caso), leva a conversa para `WAITING_ANALYST` (incrementa `version`) e a mensagem do agente traz o bloco
+`handoff_notice`. A partir daí o agente não responde; as mensagens do funcionário são gravadas para o
+analista. Se a conversa sai de `WITH_AGENT` **durante** a execução (ex.: um analista assume), a resposta
+é descartada na publicação e o stream informa o novo estado. Assumir, devolver e encerrar são do
+console (planejado).
+
+### Rascunhos propostos pelo agente
+
+O rascunho chega no bloco `draft` da mensagem do agente, com status `PENDING`. Um novo rascunho na
+mesma conversa marca o pendente anterior como `SUPERSEDED` (no máximo um pendente por conversa).
+Confirmar ou descartar segue em "Confirmação de rascunhos".
+
 Banco inacessível fora do serviço de chamados (login, rascunhos) responde `503
 DATABASE_UNAVAILABLE`. Respostas 503 repetíveis trazem `Retry-After`. Erros inesperados viram
 `500 INTERNAL_ERROR` genérico; detalhes, SQL e credenciais só vão para o log do servidor, que não
@@ -162,16 +203,18 @@ O teste [`contracts.test.ts`](../packages/shared/src/api/contracts.test.ts) gara
 
 ## Streaming (SSE)
 
-`POST /api/conversations/:id/messages` emite `ChatStreamEvent`, na ordem típica:
+`POST /api/conversations/:id/messages` e `.../resume` emitem `ChatStreamEvent`, na ordem típica:
 
 ```
-message.accepted → agent.step* → agent.delta* → agent.message → done
+message.accepted → agent.step* → agent.message → [conversation.status] → done
 ```
 
-- `agent.step`: cada passo do agente ("consultou seus chamados"), para a interface mostrar acima da resposta.
-- `agent.delta`: pedaços do texto da resposta.
-- `agent.message`: mensagem final com o `AgentDecision` completo.
-- `conversation.status`: a conversa mudou de estado (ex.: transferida).
+- `agent.step`: cada passo do agente ("consultou seus chamados"), com status (`OK`, `ERROR`,
+  `SKIPPED`), resumo do resultado e duração, para a interface mostrar acima da resposta.
+- `agent.delta`: previsto no contrato, **não emitido** hoje: o texto chega inteiro em `agent.message`
+  (a resposta é estruturada; o tempo real fica nos passos).
+- `agent.message`: mensagem final com o `AgentDecision` completo, ambos já gravados.
+- `conversation.status`: a conversa mudou de estado (ex.: transferida) ou não está com o agente.
 - `error`: falha com `ApiErrorBody`.
 
 `GET /api/conversations/:id/events` emite `ConversationEvent` (`message.created`,
@@ -191,4 +234,6 @@ Em `WAITING_ANALYST` e `WITH_ANALYST` o agente não responde. As ações do cons
 ## Idempotência
 
 - Mensagens: `clientMessageId` (UUID gerado pelo cliente); reenvio não duplica.
+- Respostas do agente: uma decisão por mensagem do funcionário (`triggerMessageId` único); retomar ou
+  reenviar não duplica mensagem, rascunho nem transferência.
 - Confirmação de rascunho: confirmar duas vezes devolve o mesmo chamado.

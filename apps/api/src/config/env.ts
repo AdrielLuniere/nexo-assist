@@ -10,8 +10,19 @@ const EnvSchema = z.object({
     .refine((value) => /^postgres(ql)?:\/\//.test(value), 'DATABASE_URL deve usar postgres:// ou postgresql://'),
   /** Tempo máximo da checagem de banco no /health. */
   HEALTH_DB_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
-  /** Modelo do agente (`provedor/modelo`). Opcional na P0.1: o agente ainda não é invocado. */
-  AGENT_MODEL: z.string().min(3).optional(),
+  /**
+   * Modelo do agente no formato `provedor/modelo` do model router do Mastra (ex.: `anthropic/claude-haiku-5-5`).
+   * A chave do provedor vem da variável dele (ex.: ANTHROPIC_API_KEY), lida pelo Mastra. Sem modelo, a API
+   * funciona, as mensagens são gravadas e a resposta do agente fica pendente (AGENT_UNAVAILABLE).
+   */
+  AGENT_MODEL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().regex(/^[a-z0-9-]+\/[\w.:-]+$/i, 'AGENT_MODEL deve ter o formato provedor/modelo').optional(),
+  ),
+  /** Tempo máximo de uma resposta do agente (inclui ferramentas). */
+  AGENT_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(120_000).default(45_000),
+  /** Respostas do agente executando ao mesmo tempo neste processo (custo e cota do provedor). */
+  AGENT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   /**
    * Segredo que assina os tokens de sessão (mínimo 32 caracteres). Obrigatório em produção; fora dela,
    * se ausente, a API gera um segredo efêmero (as sessões não sobrevivem a um reinício).

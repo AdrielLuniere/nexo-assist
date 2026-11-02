@@ -3,6 +3,7 @@ import type { ErrorRequestHandler, RequestHandler, Response } from 'express';
 import { TicketServiceError } from '@nexo/ticket-service';
 import { ZodError } from 'zod';
 import { isTransientDatabaseError } from '../../infra/prisma-errors.js';
+import { BusyError } from '../../infra/write-slots.js';
 import { AppError } from '../app-error.js';
 import { ticketErrorToAppError } from '../ticket-errors.js';
 
@@ -29,6 +30,13 @@ function isBodyParserError(error: unknown): error is { type: string; status: num
   return typeof error === 'object' && error !== null && 'type' in error && 'status' in error;
 }
 
+/** Fila local cheia além do prazo: 503 repetível (a interface tenta de novo). */
+export function busyToAppError(error: BusyError): AppError {
+  return error.resource === 'agent'
+    ? new AppError('AGENT_UNAVAILABLE', 'Muitos atendimentos ao mesmo tempo. Tente novamente em instantes.')
+    : new AppError('DATABASE_UNAVAILABLE', 'Sistema ocupado no momento. Tente novamente em instantes.');
+}
+
 export const notFoundHandler: RequestHandler = (req, _res, next) => {
   next(new AppError('NOT_FOUND', `Rota não encontrada: ${req.method} ${req.path}`));
 };
@@ -48,6 +56,11 @@ export function createErrorHandler(logger: ErrorLogger): ErrorRequestHandler {
 
     if (error instanceof TicketServiceError) {
       send(res, ticketErrorToAppError(error), req.requestId);
+      return;
+    }
+
+    if (error instanceof BusyError) {
+      send(res, busyToAppError(error), req.requestId);
       return;
     }
 

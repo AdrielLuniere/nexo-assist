@@ -352,8 +352,9 @@ model AgentDecision {
   conversationId   String
   /// Mensagem do agente gerada por esta decisão.
   messageId        String?     @unique
-  /// Mensagem do funcionário que disparou a decisão.
-  triggerMessageId String?
+  /// Mensagem do funcionário que disparou a decisão. Única: retentativas e execuções concorrentes
+  /// da mesma resposta não geram uma segunda decisão (nem mensagem, rascunho ou transferência).
+  triggerMessageId String?     @unique
   intent           AgentIntent
   understanding    String
   action           AgentAction

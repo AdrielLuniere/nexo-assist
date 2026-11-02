@@ -1,13 +1,7 @@
-import {
-  type AgentDecision,
-  type ConversationStatus,
-  type Message,
-  confidenceLevelOf,
-  employeeCanWrite,
-} from '@nexo/shared';
+import { type AgentDecision, type ConversationStatus, type Message, employeeCanWrite } from '@nexo/shared';
 import { Prisma, type PrismaClient } from '../generated/prisma/client.js';
 import { writeSlotsFor } from '../infra/write-slots.js';
-import { MESSAGE_INCLUDE, insertMessage, lockConversation, toContractMessage } from './message-writer.js';
+import { MESSAGE_INCLUDE, insertMessage, lockConversation, toContractDecision, toContractMessage } from './message-writer.js';
 
 /**
  * Persistência das conversas do funcionário. Toda consulta recebe o `employeeId` da sessão e filtra por
@@ -50,6 +44,11 @@ export interface ConversationRepository {
   /** Em ordem de envio. */
   messages(conversationId: string): Promise<Message[]>;
   decisions(conversationId: string): Promise<AgentDecision[]>;
+  /**
+   * Última mensagem do funcionário que ainda não tem decisão do agente (resposta pendente), ou `null`.
+   * Só a última importa: responder a ela leva em conta as anteriores, que estão no histórico.
+   */
+  pendingTrigger(conversationId: string): Promise<Message | null>;
   /**
    * Grava a mensagem do funcionário de forma atômica e idempotente: confere dono e estado, aplica o
    * limite, grava com ordenação estável e atualiza contador e título. Repetir o mesmo
@@ -124,24 +123,18 @@ export function createPrismaConversationRepository(prisma: PrismaClient): Conver
 
     async decisions(conversationId) {
       const rows = await prisma.agentDecision.findMany({ where: { conversationId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-      return rows.map((row) => ({
-        id: row.id,
-        conversationId: row.conversationId,
-        messageId: row.messageId,
-        intent: row.intent,
-        understanding: row.understanding,
-        action: row.action,
-        confidence: row.confidence,
-        confidenceLevel: confidenceLevelOf(row.confidence),
-        rationale: row.rationale,
-        ruleRefs: row.ruleRefs,
-        steps: Array.isArray(row.steps) ? (row.steps as AgentDecision['steps']) : [],
-        model: row.model,
-        inputTokens: row.inputTokens,
-        outputTokens: row.outputTokens,
-        latencyMs: row.latencyMs,
-        createdAt: row.createdAt.toISOString(),
-      }));
+      return rows.map(toContractDecision);
+    },
+
+    async pendingTrigger(conversationId) {
+      const last = await prisma.message.findFirst({
+        where: { conversationId, role: 'EMPLOYEE' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: MESSAGE_INCLUDE,
+      });
+      if (!last) return null;
+      const decided = await prisma.agentDecision.findUnique({ where: { triggerMessageId: last.id }, select: { id: true } });
+      return decided ? null : toContractMessage(last);
     },
 
     async acceptEmployeeMessage(input) {
@@ -181,11 +174,14 @@ export interface InMemoryConversationRepository extends ConversationRepository {
   setStatus(conversationId: string, status: ConversationStatus): void;
   /** Mensagem do agente ou do analista (testes de ordenação e de leitura). */
   addMessage(conversationId: string, role: Message['role'], content: string, at: Date): Message;
+  /** Registra que o agente respondeu a esta mensagem (deixa de estar pendente). */
+  markAnswered(messageId: string): void;
 }
 
 export function createInMemoryConversationRepository(): InMemoryConversationRepository {
   const conversations = new Map<string, ConversationRecord>();
   const messages = new Map<string, Array<Message & { clientMessageId: string | null }>>();
+  const answered = new Set<string>();
   let counter = 0;
 
   const messagesOf = (id: string) => messages.get(id) ?? [];
@@ -270,8 +266,15 @@ export function createInMemoryConversationRepository(): InMemoryConversationRepo
     async messages(conversationId) {
       return messagesOf(conversationId).map(strip);
     },
+    markAnswered(messageId) {
+      answered.add(messageId);
+    },
     async decisions() {
       return [];
+    },
+    async pendingTrigger(conversationId) {
+      const last = messagesOf(conversationId).filter((m) => m.role === 'EMPLOYEE').at(-1);
+      return last && !answered.has(last.id) ? strip(last) : null;
     },
     async acceptEmployeeMessage(input) {
       // Sem `await` entre a leitura e a escrita: equivale à trava de linha do PostgreSQL.

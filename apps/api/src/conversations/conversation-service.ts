@@ -22,9 +22,18 @@ export interface SendMessageResult {
   readonly replayed: boolean;
   readonly status: ConversationStatus;
   readonly version: number;
-  /** O agente deve responder: conversa com o agente e mensagem nova. */
+  /**
+   * O agente deve responder: conversa com o agente e mensagem ainda sem resposta. Num reenvio isso só
+   * acontece se a mensagem continua pendente (ex.: o agente falhou da primeira vez): é a retomada.
+   */
   readonly agentShouldRespond: boolean;
   readonly conversation: ConversationRecord;
+}
+
+export interface ResumeResult {
+  readonly conversation: ConversationRecord;
+  /** Mensagem do funcionário à espera de resposta, ou `null` se não há nada a retomar. */
+  readonly pending: Message | null;
 }
 
 export interface ConversationService {
@@ -32,6 +41,8 @@ export interface ConversationService {
   start(user: User): Promise<{ conversation: ConversationDetail; created: boolean }>;
   get(user: User, conversationId: string): Promise<ConversationDetail>;
   sendMessage(user: User, conversationId: string, input: SendMessageRequest): Promise<SendMessageResult>;
+  /** Localiza a resposta pendente do agente para retomar (`POST .../resume`). */
+  resume(user: User, conversationId: string): Promise<ResumeResult>;
 }
 
 export interface ConversationServiceDeps {
@@ -65,9 +76,16 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
   const now = deps.now ?? (() => new Date());
   const limit = deps.messageLimit ?? MAX_EMPLOYEE_MESSAGES_PER_SESSION;
 
+  const pendingOf = async (record: ConversationRecord) =>
+    agentCanRespond(record.status) ? conversations.pendingTrigger(record.id) : null;
+
   async function detailOf(record: ConversationRecord): Promise<ConversationDetail> {
-    const [messages, decisions] = await Promise.all([conversations.messages(record.id), conversations.decisions(record.id)]);
-    return { ...toSummary(record), messages, decisions };
+    const [messages, decisions, pending] = await Promise.all([
+      conversations.messages(record.id),
+      conversations.decisions(record.id),
+      pendingOf(record),
+    ]);
+    return { ...toSummary(record), messages, decisions, pendingAgentResponse: pending ? { messageId: pending.id } : null };
   }
 
   return {
@@ -109,17 +127,25 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
         case 'accepted':
         case 'replayed': {
           const replayed = result.kind === 'replayed';
+          // Agente pausado (conversa com analista) nunca responde. Reenvio só aciona o agente se a
+          // mensagem ainda for a resposta pendente; se já foi respondida, nada se repete.
+          const pending = replayed ? await pendingOf(result.conversation) : null;
           return {
             message: result.message,
             replayed,
             status: result.conversation.status,
             version: result.conversation.version,
-            // Agente pausado (conversa com analista) nunca responde; reenvio não dispara nova resposta.
-            agentShouldRespond: !replayed && agentCanRespond(result.conversation.status),
+            agentShouldRespond: agentCanRespond(result.conversation.status) && (!replayed || pending?.id === result.message.id),
             conversation: result.conversation,
           };
         }
       }
+    },
+
+    async resume(user, conversationId) {
+      const record = await conversations.find(user.id, conversationId);
+      if (!record) throw notFound();
+      return { conversation: record, pending: await pendingOf(record) };
     },
   };
 }

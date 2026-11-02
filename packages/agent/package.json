@@ -2,13 +2,18 @@
   "name": "@nexo/agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Agente Mastra do Nexo Assist. Não acessa banco: age apenas por portas injetadas.",
+  "description": "Agente Mastra do Nexo Assist. Não acessa banco: lê por portas injetadas e só planeja escritas (a API publica).",
   "type": "module",
   "exports": {
     ".": {
       "@nexo/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@nexo/source": "./src/testing/scripted-model.ts",
+      "types": "./dist/testing/scripted-model.d.ts",
+      "default": "./dist/testing/scripted-model.js"
     }
   },
   "files": [

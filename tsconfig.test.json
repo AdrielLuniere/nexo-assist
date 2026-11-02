@@ -6,5 +6,5 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["packages/*/src/**/*.test.ts", "apps/api/src/**/*.test.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.db.config.ts", "prisma.config.ts"]
+  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.fixtures.ts", "apps/api/src/**/*.test.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.db.config.ts", "vitest.live.config.ts", "prisma.config.ts"]
 }

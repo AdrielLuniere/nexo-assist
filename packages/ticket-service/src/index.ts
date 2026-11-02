@@ -8,4 +8,4 @@ export * from './outage-simulation.js';
 export * from './in-memory.js';
 export { computeSlaDueAt, isOpenStatus, isOverdue } from './sla.js';
 export { alignToBusinessTime, addBusinessDays, addBusinessHours } from './business-time.js';
-export { DUPLICATE_BLOCK_THRESHOLD, DUPLICATE_CANDIDATE_THRESHOLD, similarityScore } from './duplicates.js';
+export { DUPLICATE_BLOCK_THRESHOLD, DUPLICATE_CANDIDATE_THRESHOLD, similarityScore, tokenize } from './duplicates.js';

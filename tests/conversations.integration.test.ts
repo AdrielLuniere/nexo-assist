@@ -260,14 +260,30 @@ describe('estado da conversa (PostgreSQL)', () => {
     expect(await prisma.message.count({ where: { conversationId: id, role: 'EMPLOYEE' } })).toBe(1);
   });
 
-  it('com o agente, o responder é acionado uma única vez por mensagem nova', async () => {
+  it('com o agente, reenvio de mensagem já respondida não aciona o responder de novo', async () => {
+    const token = await login(ANA);
+    const id = await start(token);
+    responder.mockClear();
+    const clientMessageId = randomUUID();
+    const first = parseSse((await send(token, id, 'Olá', clientMessageId)).text);
+    const triggerMessageId = (first[0]?.data.message as { id: string }).id;
+    // Resposta registrada (o responder deste arquivo é falso e não publica nada).
+    await prisma.agentDecision.create({
+      data: { conversationId: id, triggerMessageId, intent: 'SMALL_TALK', understanding: 'Cumprimento.', action: 'REPLY', confidence: 0.9, rationale: 'Teste.' },
+    });
+    await send(token, id, 'Olá', clientMessageId);
+    expect(responder).toHaveBeenCalledOnce();
+  });
+
+  it('com o agente, reenvio de mensagem ainda pendente retoma a resposta (P0.5)', async () => {
     const token = await login(ANA);
     const id = await start(token);
     responder.mockClear();
     const clientMessageId = randomUUID();
     await send(token, id, 'Olá', clientMessageId);
     await send(token, id, 'Olá', clientMessageId);
-    expect(responder).toHaveBeenCalledOnce();
+    expect(responder).toHaveBeenCalledTimes(2);
+    expect(await prisma.message.count({ where: { conversationId: id } })).toBe(1);
   });
 });
 

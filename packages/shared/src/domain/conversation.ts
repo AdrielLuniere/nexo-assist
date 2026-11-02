@@ -109,5 +109,11 @@ export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export const ConversationDetailSchema = ConversationSummarySchema.extend({
   messages: z.array(MessageSchema),
   decisions: z.array(AgentDecisionSchema),
+  /**
+   * Última mensagem do funcionário ainda sem resposta do agente (ex.: o modelo falhou depois de a
+   * mensagem ser gravada). Só existe com a conversa em WITH_AGENT. A interface retoma a resposta com
+   * `POST /api/conversations/:id/resume`.
+   */
+  pendingAgentResponse: z.object({ messageId: IdSchema }).nullable(),
 });
 export type ConversationDetail = z.infer<typeof ConversationDetailSchema>;

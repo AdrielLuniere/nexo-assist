@@ -1,13 +1,18 @@
-import { IdSchema, LoginRequestSchema, SendMessageRequestSchema, TicketCodeSchema } from '@nexo/shared';
+import { AgentTurnError } from '@nexo/agent';
+import { type ApiErrorBody, IdSchema, LoginRequestSchema, type Message, SendMessageRequestSchema, TicketCodeSchema, type User } from '@nexo/shared';
 import type { TicketService } from '@nexo/ticket-service';
-import { type RequestHandler, Router } from 'express';
+import { type Request, type RequestHandler, type Response, Router } from 'express';
 import type { AuthService } from '../../auth/auth-service.js';
+import type { ConversationRecord } from '../../conversations/conversation-repository.js';
 import type { ConversationService } from '../../conversations/conversation-service.js';
 import { type AgentResponder, noAgentResponder } from '../../conversations/responder.js';
 import type { DraftService } from '../../drafts/draft-service.js';
+import { isTransientDatabaseError } from '../../infra/prisma-errors.js';
+import { BusyError } from '../../infra/write-slots.js';
+import { AppError } from '../app-error.js';
 import { authenticate, currentUser, requireRole } from '../middleware/authenticate.js';
-import type { ErrorLogger } from '../middleware/error-handler.js';
-import { openSse } from '../sse.js';
+import { type ErrorLogger, busyToAppError } from '../middleware/error-handler.js';
+import { type SseStream, openSse } from '../sse.js';
 
 export interface ApiDeps {
   readonly auth: AuthService;
@@ -23,6 +28,52 @@ const noStore: RequestHandler = (_req, res, next) => {
   res.setHeader('cache-control', 'no-store');
   next();
 };
+
+const AGENT_FAILURE_MESSAGES: Record<AgentTurnError['reason'], string> = {
+  MODEL_UNAVAILABLE: 'Não consegui responder agora. Sua mensagem ficou registrada; tente novamente em instantes.',
+  TIMEOUT: 'A resposta demorou mais que o esperado. Sua mensagem ficou registrada; tente novamente.',
+  INVALID_RESPONSE: 'Não consegui montar uma resposta válida. Sua mensagem ficou registrada; tente novamente.',
+  ABORTED: 'A resposta foi interrompida. Sua mensagem ficou registrada; tente novamente.',
+};
+
+/** Erro depois de o stream abrir: vira evento `error` com código de contrato e mensagem segura. */
+function streamErrorOf(error: unknown): AppError {
+  if (error instanceof AppError) return error;
+  if (error instanceof AgentTurnError) return new AppError('AGENT_UNAVAILABLE', AGENT_FAILURE_MESSAGES[error.reason]);
+  if (error instanceof BusyError) return busyToAppError(error);
+  if (isTransientDatabaseError(error)) return new AppError('DATABASE_UNAVAILABLE', 'Banco de dados indisponível. Tente novamente em instantes.');
+  return new AppError('AGENT_UNAVAILABLE', 'Não consegui responder agora. Tente novamente.');
+}
+
+/**
+ * Repassa a resposta do agente pelo stream já aberto. Qualquer falha vira um evento `error` (a mensagem
+ * do funcionário continua gravada e pendente) e o stream sempre termina com `done`.
+ */
+async function streamAgentResponse(
+  req: Request,
+  res: Response,
+  stream: SseStream,
+  responder: AgentResponder,
+  logger: ErrorLogger,
+  input: { user: User; conversation: ConversationRecord; message: Message },
+): Promise<void> {
+  const abort = new AbortController();
+  res.on('close', () => abort.abort());
+  try {
+    for await (const event of responder.respond({ ...input, signal: abort.signal })) {
+      if (!stream.send(event)) break;
+    }
+  } catch (error) {
+    const appError = streamErrorOf(error);
+    logger.error('Falha ao responder no stream', {
+      requestId: req.requestId,
+      code: appError.code,
+      error: error instanceof AgentTurnError ? { name: error.name, reason: error.reason } : error instanceof Error ? { name: error.name, message: error.message } : 'desconhecido',
+    });
+    const body: ApiErrorBody = { error: { code: appError.code, message: appError.message, retryable: appError.retryable, requestId: req.requestId } };
+    stream.send({ event: 'error', data: body });
+  }
+}
 
 /** Rotas de negócio, montadas em `/api`. A lógica de domínio fica nos serviços; aqui só há HTTP. */
 export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
@@ -82,8 +133,6 @@ export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
     const accepted = await deps.conversations.sendMessage(user, conversationId, input);
 
     const stream = openSse(res);
-    const abort = new AbortController();
-    res.on('close', () => abort.abort());
     try {
       stream.send({ event: 'message.accepted', data: { message: accepted.message } });
       if (accepted.status !== 'WITH_AGENT') {
@@ -91,23 +140,35 @@ export function apiRouter(deps: ApiDeps, logger: ErrorLogger): Router {
         stream.send({ event: 'conversation.status', data: { status: accepted.status, version: accepted.version } });
       }
       if (accepted.agentShouldRespond) {
-        const events = responder.respond({ user, conversation: accepted.conversation, message: accepted.message, signal: abort.signal });
-        for await (const event of events) {
-          if (!stream.send(event)) break;
-        }
+        await streamAgentResponse(req, res, stream, responder, logger, { user, conversation: accepted.conversation, message: accepted.message });
       }
-    } catch (error) {
-      logger.error('Falha ao responder no stream', {
-        requestId: req.requestId,
-        error: error instanceof Error ? { name: error.name, message: error.message } : 'desconhecido',
-      });
-      stream.send({
-        event: 'error',
-        data: { error: { code: 'AGENT_UNAVAILABLE', message: 'Não consegui responder agora. Tente novamente.', retryable: true, requestId: req.requestId } },
-      });
+    } finally {
+      stream.send({ event: 'done', data: {} });
+      stream.end();
     }
-    stream.send({ event: 'done', data: {} });
-    stream.end();
+  });
+
+  /**
+   * Retoma a resposta pendente do agente (ex.: o modelo falhou depois de a mensagem ser gravada, ou o
+   * cliente caiu). Idempotente: se a resposta já existe, ela é devolvida sem chamar o modelo de novo;
+   * se não há pendência, o stream só informa o estado e termina.
+   */
+  router.post('/conversations/:conversationId/resume', ...employeeOnly, async (req, res) => {
+    const user = currentUser(req);
+    const conversationId = IdSchema.parse(req.params.conversationId);
+    const { conversation, pending } = await deps.conversations.resume(user, conversationId);
+
+    const stream = openSse(res);
+    try {
+      if (conversation.status !== 'WITH_AGENT') {
+        stream.send({ event: 'conversation.status', data: { status: conversation.status, version: conversation.version } });
+      } else if (pending) {
+        await streamAgentResponse(req, res, stream, responder, logger, { user, conversation, message: pending });
+      }
+    } finally {
+      stream.send({ event: 'done', data: {} });
+      stream.end();
+    }
   });
 
   // --- Rascunhos ----------------------------------------------------------

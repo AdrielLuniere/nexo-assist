@@ -1,4 +1,4 @@
-import { type AgentDecision, type ConversationStatus, type Handoff, type Message, employeeCanWrite } from '@nexo/shared';
+import { type AgentDecision, type ConversationStatus, type Handoff, type Message, type MessageBlock, employeeCanWrite } from '@nexo/shared';
 import { Prisma, type PrismaClient } from '../generated/prisma/client.js';
 import { writeSlotsFor } from '../infra/write-slots.js';
 import { MESSAGE_INCLUDE, insertMessage, lockConversation, toContractDecision, toContractMessage } from './message-writer.js';
@@ -222,6 +222,8 @@ export interface InMemoryWorld {
   readonly conversations: Map<string, ConversationRecord>;
   readonly messages: Map<string, StoredMessage[]>;
   readonly handoffs: Map<string, Handoff[]>;
+  /** Decisões do agente por conversa, em ordem. */
+  readonly decisions: Map<string, AgentDecision[]>;
   readonly answered: Set<string>;
   nextId(prefix: string): string;
 }
@@ -232,6 +234,7 @@ export function createInMemoryWorld(): InMemoryWorld {
     conversations: new Map(),
     messages: new Map(),
     handoffs: new Map(),
+    decisions: new Map(),
     answered: new Set(),
     nextId: (prefix) => `${prefix}_${String(++counter).padStart(6, '0')}`,
   };
@@ -248,6 +251,7 @@ export function appendInMemoryMessage(
   content: string,
   clientMessageId: string | null,
   now: Date,
+  extra: { readonly blocks?: MessageBlock[]; readonly decisionId?: string | null } = {},
 ): { message: StoredMessage; at: Date } {
   const floor = conversation.lastMessageAt ? conversation.lastMessageAt.getTime() + 1 : 0;
   const at = new Date(Math.max(now.getTime(), floor));
@@ -257,8 +261,8 @@ export function appendInMemoryMessage(
     role,
     authorId,
     content,
-    blocks: [],
-    decisionId: null,
+    blocks: extra.blocks ?? [],
+    decisionId: extra.decisionId ?? null,
     createdAt: at.toISOString(),
     clientMessageId,
   };
@@ -364,8 +368,8 @@ export function createInMemoryConversationRepository(world: InMemoryWorld = crea
     markAnswered(messageId) {
       answered.add(messageId);
     },
-    async decisions() {
-      return [];
+    async decisions(conversationId) {
+      return [...(world.decisions.get(conversationId) ?? [])];
     },
     async pendingTrigger(conversationId) {
       return pendingInMemory(world, conversationId);

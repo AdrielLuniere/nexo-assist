@@ -10,6 +10,7 @@ import {
 } from '@nexo/shared';
 import { AppError } from '../http/app-error.js';
 import type { ConversationRecord, ConversationRepository } from './conversation-repository.js';
+import { type DraftLookup, withCurrentDrafts } from './draft-blocks.js';
 
 /**
  * Casos de uso das conversas do funcionário. Toda operação recebe o usuário da sessão e só enxerga
@@ -60,6 +61,8 @@ export interface ConversationService {
 
 export interface ConversationServiceDeps {
   readonly conversations: ConversationRepository;
+  /** Estado atual dos rascunhos citados no histórico (ver `withCurrentDrafts`). */
+  readonly drafts?: DraftLookup;
   readonly now?: () => Date;
   readonly messageLimit?: number;
 }
@@ -97,7 +100,7 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
 
   async function detailOf(record: ConversationRecord): Promise<ConversationDetail> {
     const [messages, decisions, pending] = await Promise.all([
-      conversations.messages(record.id),
+      conversations.messages(record.id).then((messages) => withCurrentDrafts(messages, deps.drafts)),
       conversations.decisions(record.id),
       pendingOf(record),
     ]);

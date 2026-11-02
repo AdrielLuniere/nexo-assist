@@ -16,7 +16,7 @@ export const AGENT_TOOLS = {
     writes: false,
   },
   getMyTicket: {
-    label: 'abriu o chamado',
+    label: 'consultou o chamado',
     writes: false,
   },
   findDuplicateTickets: {

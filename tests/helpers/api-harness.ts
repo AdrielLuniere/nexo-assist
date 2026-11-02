@@ -20,6 +20,11 @@ import { createHandoffRequestService, createInMemoryHandoffRequestRepository } f
 import { createInMemoryConversationRepository, createInMemoryWorld } from '../../apps/api/src/conversations/conversation-repository.js';
 import { createConversationService } from '../../apps/api/src/conversations/conversation-service.js';
 import type { AgentResponder } from '../../apps/api/src/conversations/responder.js';
+import { type ScriptStep, createScriptedModel } from '@nexo/agent/testing';
+import { createAgentResponder } from '../../apps/api/src/agent/agent-responder.js';
+import { createInMemoryAgentTurnStore } from '../../apps/api/src/agent/agent-turn-store.js';
+import { createInMemoryHelpCenter } from '../../apps/api/src/agent/help-center.js';
+import { HELP_ARTICLES } from '../../apps/api/src/seed/data.js';
 import { createInMemoryUserRepository } from '../../apps/api/src/auth/user-repository.js';
 import { createDraftRepositoryGate } from '../../apps/api/src/drafts/draft-gate.js';
 import { createInMemoryDraftRepository } from '../../apps/api/src/drafts/draft-repository.js';
@@ -97,6 +102,11 @@ export interface HarnessOptions {
   readonly ticketServiceOverride?: (real: TicketService) => TicketService;
   readonly sessionTtlSeconds?: number;
   readonly responder?: AgentResponder;
+  /**
+   * Agente REAL (Mastra, ferramentas, política e publicação) com um modelo roteirizado, sem LLM pago.
+   * As respostas, decisões, rascunhos e transferências ficam no estado em memória da API.
+   */
+  readonly agentScript?: ScriptStep[];
   readonly messageLimit?: number;
   /** Parâmetros do stream de eventos (tempo do keep-alive e limite de conexões por funcionário). */
   readonly eventStreams?: { readonly maxPerUser?: number; readonly heartbeatMs?: number };
@@ -107,7 +117,8 @@ export async function buildHarness(options: HarnessOptions = {}) {
   const now = () => clock.current;
 
   const store = createInMemoryTicketStore({ tickets: TICKETS, sequences: { INC: 20344, REQ: 10442 } });
-  const drafts = createInMemoryDraftRepository(now);
+  const world = createInMemoryWorld();
+  const drafts = createInMemoryDraftRepository(now, world);
   const realTickets = createTicketService({ store, confirmations: createDraftRepositoryGate(drafts), clock: { now } });
 
   let tickets: TicketService = realTickets;
@@ -115,10 +126,23 @@ export async function buildHarness(options: HarnessOptions = {}) {
   if (options.retry !== false) tickets = withRetry(tickets, { sleep: () => Promise.resolve() });
   if (options.ticketServiceOverride) tickets = options.ticketServiceOverride(tickets);
 
-  const world = createInMemoryWorld();
   const conversations = createInMemoryConversationRepository(world);
   const events = createConversationEventBus();
-  const consoleService = createConsoleService({ console: createInMemoryConsoleRepository(world, USERS), conversations, tickets, events, now });
+  const consoleService = createConsoleService({ console: createInMemoryConsoleRepository(world, USERS), conversations, tickets, events, drafts, now });
+  const scripted = options.agentScript ? createScriptedModel(options.agentScript) : null;
+  const responder: AgentResponder | undefined =
+    options.responder ??
+    (scripted
+      ? createAgentResponder({
+          store: createInMemoryAgentTurnStore(world, drafts),
+          tickets,
+          helpCenter: createInMemoryHelpCenter(HELP_ARTICLES),
+          model: scripted.model,
+          modelId: 'teste/roteirizado',
+          logger: { info: () => undefined, warn: () => undefined },
+          now,
+        })
+      : undefined);
   const users = createInMemoryUserRepository(USERS);
   const auth = createAuthService({ users, secret: SECRET, sessionTtlSeconds: options.sessionTtlSeconds ?? 3600, now });
   const logger = { error: vi.fn() };
@@ -131,8 +155,8 @@ export async function buildHarness(options: HarnessOptions = {}) {
       auth,
       tickets,
       drafts: createDraftService({ drafts, tickets, now }),
-      conversations: createConversationService({ conversations, now, ...(options.messageLimit ? { messageLimit: options.messageLimit } : {}) }),
-      ...(options.responder ? { responder: options.responder } : {}),
+      conversations: createConversationService({ conversations, drafts, now, ...(options.messageLimit ? { messageLimit: options.messageLimit } : {}) }),
+      ...(responder ? { responder } : {}),
       console: consoleService,
       handoffs: createHandoffRequestService({ handoffs: createInMemoryHandoffRequestRepository(world), conversations, events, now }),
       events,
@@ -149,6 +173,9 @@ export async function buildHarness(options: HarnessOptions = {}) {
     drafts,
     conversations,
     events,
+    world,
+    /** Chamadas feitas ao modelo roteirizado (com `agentScript`). */
+    modelCalls: scripted?.calls ?? [],
     logger,
     /** Serviço sem retry nem simulação de queda, para consultar o estado real. */
     realTickets,

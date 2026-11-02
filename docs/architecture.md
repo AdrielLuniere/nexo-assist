@@ -314,6 +314,44 @@ O console não escreve em chamados (nenhuma rota do console usa o serviço de ch
 - Se o sistema de chamados estiver fora, o detalhe do console responde 503 repetível (o painel é parte
   do contrato do detalhe).
 
+## Interface web (P0.7)
+
+[`apps/web`](../apps/web/src) (React 19 + Vite + Tailwind, sem biblioteca de componentes nem de ícones).
+
+| Peça | Papel |
+| --- | --- |
+| `lib/api.ts` | Cliente da API; valida toda resposta com os schemas de `@nexo/shared` e converte erros em `ApiError` (código do contrato) |
+| `lib/sse.ts` | Leitor de SSE sobre `fetch` (o `EventSource` não envia `Authorization` e as rotas de mensagem são POST) |
+| `lib/conversation-events.ts` | Assina `GET .../events` e reconecta com espera crescente, enviando `Last-Event-ID` |
+| `session.tsx` | Token em `localStorage` ("manter conectado") ou `sessionStorage`; papel relido em `/api/auth/me`; 401 ou validade vencida voltam ao login com aviso |
+| `employee/use-chat.ts` | Estado do chat: junta por id o que chega do histórico, do stream de resposta e do stream de eventos (sem duplicar); retoma a resposta pendente uma vez por mensagem; reenvio de rede com o mesmo `clientMessageId` |
+| `console/use-console.ts` | Fila e conversa do analista; ações com a `version` exibida; `409 CONFLICT` recarrega e avisa |
+| `components/decision.tsx` | Passos acima da resposta e painel da decisão, só com o `AgentDecision` gravado (ou os `agent.step` reais durante a resposta) |
+
+**Decisões.**
+
+- O console não tem stream de eventos no contrato: a fila e a conversa aberta são relidas a cada 8 s e
+  logo depois de cada ação. O funcionário, sim, recebe em tempo real.
+- Respostas rápidas e seleção de chamado só valem na última mensagem do agente e com ele ativo; rascunho
+  pendente pode ser confirmado enquanto a conversa não estiver encerrada (regra da P0.3).
+- O limite exibido é o do PRD (30); se o servidor recusar antes, o erro dele aparece.
+- Do protótipo ficaram de fora o que não tem dado real: métricas do login ("8 s", "72%", "analistas
+  online"), presença ("Disponível", "digitando…"), contadores por filtro, "Editar" rascunho e
+  "Redefinir senha". O login mantém um exemplo de conversa marcado como ilustrativo.
+- O nome do analista não está no contrato de mensagem: o funcionário vê "Analista do suporte" e o
+  analista vê "Você" nas próprias mensagens.
+
+**Integração com o backend (mudanças desta fase).** O bloco `draft` do histórico passa a refletir o
+estado atual do rascunho (`conversations/draft-blocks.ts`), e o rótulo do passo `getMyTicket` virou
+"consultou o chamado" ("abriu o chamado" sugeria criação). Para testar a interface sem banco nem LLM,
+existe um `AgentTurnStore` em memória que segue a mesma sequência da publicação no PostgreSQL.
+
+**Testes de interface.** `apps/web/src/**/*.test.tsx` rodam em jsdom contra a API real servida em
+memória (Express, serviços, agente Mastra com modelo roteirizado). O `fetch` e o SSE são os de verdade.
+Além disso, a fidelidade visual foi conferida em Chrome headless (desktop, tablet e celular) com a mesma
+API; essa conferência encontrou um defeito que o jsdom não mostra (um efeito que devolvia a Promise de
+`scrollIntoView` derrubava o console), e os testes agora imitam esse comportamento dos navegadores.
+
 ## Regras
 
 Parâmetros em [`packages/shared/src/domain/rules.ts`](../packages/shared/src/domain/rules.ts).

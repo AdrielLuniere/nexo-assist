@@ -206,7 +206,11 @@ Corpo opcional `{ note }` (até 500 caracteres). Resposta `{ handoff, conversati
 
 ### Rascunhos propostos pelo agente
 
-O rascunho chega no bloco `draft` da mensagem do agente, com status `PENDING`. Um novo rascunho na
+O rascunho chega no bloco `draft` da mensagem do agente, com status `PENDING`. Ao ler o histórico
+(`GET /api/conversations/:id` e o detalhe do console), o bloco traz o **estado atual** do rascunho
+(`status`, `resultTicketCode`, `confirmedAt`), não o retrato do momento em que foi proposto; o conteúdo
+proposto não muda. Assim a interface não oferece "Confirmar" num rascunho já confirmado, descartado ou
+substituído, inclusive depois de recarregar. Um novo rascunho na
 mesma conversa marca o pendente anterior como `SUPERSEDED` (no máximo um pendente por conversa).
 Confirmar ou descartar segue em "Confirmação de rascunhos".
 

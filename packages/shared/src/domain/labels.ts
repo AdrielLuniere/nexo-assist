@@ -1,5 +1,9 @@
 import type {
+  AffectedScope,
   AgentAction,
+  AgentIntent,
+  DraftOperation,
+  DraftStatus,
   ConversationStatus,
   HandoffReason,
   TicketCategory,
@@ -64,4 +68,48 @@ export const AGENT_ACTION_LABELS: Record<AgentAction, string> = {
   TRANSFER_TO_ANALYST: 'Transferiu para um analista',
   REDIRECT_OUT_OF_SCOPE: 'Redirecionou assunto fora de TI',
   REPLY: 'Respondeu',
+};
+
+export const AGENT_INTENT_LABELS: Record<AgentIntent, string> = {
+  ASK_QUESTION: 'Tirar uma dúvida',
+  CHECK_TICKET_STATUS: 'Consultar um chamado',
+  UPDATE_TICKET: 'Atualizar um chamado',
+  OPEN_TICKET: 'Abrir um chamado',
+  REOPEN_TICKET: 'Reabrir um chamado',
+  TALK_TO_ANALYST: 'Falar com um analista',
+  OUT_OF_SCOPE: 'Assunto fora de TI',
+  SMALL_TALK: 'Conversa',
+  UNCLEAR: 'Pedido pouco claro',
+};
+
+export const AFFECTED_SCOPE_LABELS: Record<AffectedScope, string> = {
+  INDIVIDUAL: 'Somente você',
+  TEAM: 'Sua equipe',
+  COMPANY: 'Toda a empresa',
+};
+
+export const DRAFT_OPERATION_LABELS: Record<DraftOperation, string> = {
+  CREATE: 'Novo chamado',
+  UPDATE: 'Atualização de chamado',
+  REOPEN: 'Reabertura de chamado',
+};
+
+export const DRAFT_STATUS_LABELS: Record<DraftStatus, string> = {
+  PENDING: 'Aguardando confirmação',
+  CONFIRMED: 'Confirmado',
+  DISCARDED: 'Descartado',
+  SUPERSEDED: 'Substituído por um rascunho mais novo',
+};
+
+/** Regras do Anexo A citadas nas decisões do agente (`RULE_REFS`). */
+export const RULE_REF_LABELS: Record<string, string> = {
+  'A.TIPO': 'Tipo: incidente ou requisição',
+  'A.CATEGORIA': 'Categoria do chamado',
+  'A.ABERTURA': 'Dados obrigatórios para abrir',
+  'A.DUPLICIDADE': 'Sem chamados duplicados',
+  'A.REABERTURA': 'Reabertura em até 7 dias',
+  'A.TRANSFERENCIA': 'Quando transferir para um analista',
+  'A.PRIVACIDADE': 'Privacidade dos chamados',
+  'A.ESCOPO': 'Somente assuntos de TI',
+  'A.PRIORIDADE_PRAZO': 'Prioridade e prazo',
 };

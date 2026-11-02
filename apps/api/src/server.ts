@@ -62,6 +62,7 @@ function main(): void {
   });
 
   const conversations = createPrismaConversationRepository(prisma);
+  const drafts = createPrismaDraftRepository(prisma);
   const events = createConversationEventBus();
 
   const app = createApp({
@@ -76,10 +77,10 @@ function main(): void {
         sessionTtlSeconds: env.AUTH_SESSION_TTL_MINUTES * 60,
       }),
       tickets,
-      conversations: createConversationService({ conversations }),
-      drafts: createDraftService({ drafts: createPrismaDraftRepository(prisma), tickets }),
+      conversations: createConversationService({ conversations, drafts }),
+      drafts: createDraftService({ drafts, tickets }),
       responder,
-      console: createConsoleService({ console: createPrismaConsoleRepository(prisma), conversations, tickets, events }),
+      console: createConsoleService({ console: createPrismaConsoleRepository(prisma), conversations, tickets, events, drafts }),
       events,
       handoffs: createHandoffRequestService({ handoffs: createPrismaHandoffRequestRepository(prisma), conversations, events }),
     },

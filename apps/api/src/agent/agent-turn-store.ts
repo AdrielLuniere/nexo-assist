@@ -2,10 +2,14 @@ import type { AgentTurnResult } from '@nexo/agent';
 import {
   type AgentDecision,
   type ConversationStatus,
+  type Handoff,
   type Message,
   type MessageBlock,
   agentCanRespond,
+  confidenceLevelOf,
 } from '@nexo/shared';
+import { type InMemoryWorld, appendInMemoryMessage, stripClientId } from '../conversations/conversation-repository.js';
+import type { InMemoryDraftRepository } from '../drafts/draft-repository.js';
 import { type ConversationRow, MESSAGE_INCLUDE, insertMessage, lockConversation, toContractDecision, toContractMessage } from '../conversations/message-writer.js';
 import type { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { writeSlotsFor } from '../infra/write-slots.js';
@@ -212,6 +216,124 @@ export function createPrismaAgentTurnStore(prisma: PrismaClient): AgentTurnStore
           };
         }, TX_OPTIONS),
       );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Em memória (testes de interface e de API sem banco)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mesma sequência da publicação no PostgreSQL (dono, já respondida, estado e versão, rascunho que
+ * substitui o pendente, transferência, mensagem e decisão), sem `await` entre ler e gravar: equivale
+ * à trava de linha. Só para testes; a implementação real é a do Prisma acima.
+ */
+export function createInMemoryAgentTurnStore(world: InMemoryWorld, drafts: InMemoryDraftRepository): AgentTurnStore {
+  const answerOf = (conversationId: string, triggerMessageId: string) => {
+    const decision = (world.decisions.get(conversationId) ?? []).find((d) => d.triggerMessageId === triggerMessageId);
+    const message = decision ? (world.messages.get(conversationId) ?? []).find((m) => m.id === decision.messageId) : undefined;
+    return decision && message ? { message: stripClientId(message), decision } : null;
+  };
+  const pendingDrafts = new Map<string, string>();
+
+  return {
+    async load(employeeId, conversationId, triggerMessageId, historyLimit) {
+      const conversation = world.conversations.get(conversationId);
+      if (!conversation || conversation.employeeId !== employeeId) return null;
+      const all = world.messages.get(conversationId) ?? [];
+      const index = all.findIndex((m) => m.id === triggerMessageId && m.role === 'EMPLOYEE');
+      if (index < 0) return null;
+      return {
+        status: conversation.status,
+        version: conversation.version,
+        history: all.slice(Math.max(0, index + 1 - historyLimit), index + 1).map(stripClientId),
+        answered: answerOf(conversationId, triggerMessageId),
+      };
+    },
+
+    async publish({ employeeId, conversationId, triggerMessageId, expectedVersion, result, now }) {
+      const conversation = world.conversations.get(conversationId);
+      if (!conversation || conversation.employeeId !== employeeId) return { kind: 'not_found' };
+      const answered = answerOf(conversationId, triggerMessageId);
+      if (answered) return { kind: 'already_published', ...answered, status: conversation.status, version: conversation.version };
+      if (!agentCanRespond(conversation.status) || conversation.version !== expectedVersion) {
+        return { kind: 'agent_paused', status: conversation.status, version: conversation.version };
+      }
+      if (!(world.messages.get(conversationId) ?? []).some((m) => m.id === triggerMessageId && m.role === 'EMPLOYEE')) return { kind: 'not_found' };
+
+      const blocks: MessageBlock[] = [...result.reply.blocks];
+      let { status, version } = conversation;
+
+      if (result.draft) {
+        const previous = pendingDrafts.get(conversationId);
+        if (previous) await drafts.transition(previous, 'PENDING', 'SUPERSEDED', now);
+        const id = world.nextId('drf');
+        drafts.addDraft({
+          id,
+          conversationId,
+          employeeId,
+          operation: result.draft.operation,
+          payload: result.draft,
+          status: 'PENDING',
+          createdAt: now,
+          conversationOwnerId: employeeId,
+          conversationStatus: conversation.status,
+        });
+        pendingDrafts.set(conversationId, id);
+        blocks.push({
+          type: 'draft',
+          draft: { id, conversationId, status: 'PENDING', payload: result.draft, resultTicketCode: null, createdAt: now.toISOString(), confirmedAt: null },
+        });
+      }
+
+      if (result.handoff) {
+        const handoff: Handoff = {
+          id: world.nextId('hnd'),
+          conversationId,
+          reason: result.handoff.reason,
+          status: 'WAITING',
+          summary: result.handoff.summary,
+          relatedTicketCode: result.handoff.relatedTicketCode,
+          assumedById: null,
+          createdAt: now.toISOString(),
+          assumedAt: null,
+          endedAt: null,
+        };
+        world.handoffs.set(conversationId, [...(world.handoffs.get(conversationId) ?? []), handoff]);
+        blocks.push({ type: 'handoff_notice', handoffId: handoff.id, reason: handoff.reason, relatedTicketCode: handoff.relatedTicketCode });
+        status = 'WAITING_ANALYST';
+        version += 1;
+      }
+
+      if (result.reply.quickReplies.length > 0) blocks.push({ type: 'quick_replies', options: result.reply.quickReplies });
+
+      const decisionId = world.nextId('dec');
+      const { message, at } = appendInMemoryMessage(world, conversation, 'AGENT', null, result.reply.text, agentReplyKey(triggerMessageId), now, { blocks, decisionId });
+      const { decision: d, telemetry } = result;
+      const decision: AgentDecision = {
+        id: decisionId,
+        conversationId,
+        messageId: message.id,
+        triggerMessageId,
+        intent: d.intent,
+        understanding: d.understanding,
+        action: d.action,
+        confidence: d.confidence,
+        confidenceLevel: confidenceLevelOf(d.confidence),
+        rationale: d.rationale,
+        ruleRefs: d.ruleRefs,
+        steps: d.steps,
+        model: telemetry.model,
+        inputTokens: telemetry.inputTokens,
+        outputTokens: telemetry.outputTokens,
+        latencyMs: telemetry.latencyMs,
+        createdAt: at.toISOString(),
+      };
+      world.decisions.set(conversationId, [...(world.decisions.get(conversationId) ?? []), decision]);
+      world.answered.add(triggerMessageId);
+      world.conversations.set(conversationId, { ...conversation, status, version, lastMessageAt: at, updatedAt: at });
+      return { kind: 'published', message: stripClientId(message), decision, status, version };
     },
   };
 }

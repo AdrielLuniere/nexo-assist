@@ -12,6 +12,7 @@ import { agentCanRespond } from '@nexo/shared';
 import type { TicketService } from '@nexo/ticket-service';
 import type { ConversationEventBus } from '../conversations/conversation-events.js';
 import type { ConversationRepository } from '../conversations/conversation-repository.js';
+import { type DraftLookup, withCurrentDrafts } from '../conversations/draft-blocks.js';
 import { toSummary } from '../conversations/conversation-service.js';
 import { AppError } from '../http/app-error.js';
 import type { ConsoleAction } from './console-rules.js';
@@ -45,6 +46,8 @@ export interface ConsoleServiceDeps {
   /** Mensagens, decisões e resposta pendente (as mesmas leituras do funcionário). */
   readonly conversations: ConversationRepository;
   readonly tickets: TicketService;
+  /** Estado atual dos rascunhos citados no histórico. */
+  readonly drafts?: DraftLookup;
   readonly events: ConversationEventBus;
   readonly now?: () => Date;
 }
@@ -128,7 +131,7 @@ export function createConsoleService(deps: ConsoleServiceDeps): ConsoleService {
       if (!row) throw notFound();
       const { conversation, employee } = row;
       const [messages, decisions, pending, employeeTickets] = await Promise.all([
-        deps.conversations.messages(conversation.id),
+        deps.conversations.messages(conversation.id).then((messages) => withCurrentDrafts(messages, deps.drafts)),
         deps.conversations.decisions(conversation.id),
         agentCanRespond(conversation.status) ? deps.conversations.pendingTrigger(conversation.id) : Promise.resolve(null),
         // O funcionário vem da própria conversa (dado do servidor), nunca de um parâmetro da requisição.

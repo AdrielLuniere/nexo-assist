@@ -4,13 +4,13 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.6 (transferência e console do analista, sem interface).**
+> **Status: P0.7 (interface web completa: login, chat do funcionário e console do analista).**
 >
 > | Implementado | Planejado |
 > | --- | --- |
-> | Monorepo, contratos, fronteiras entre pacotes, `GET /health`, migrations e seed de exemplo | Telas do protótipo (chat e console) |
+> | Monorepo, contratos, fronteiras entre pacotes, `GET /health`, migrations e seed de exemplo | Deploy |
 > | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | |
-> | Persistência em PostgreSQL de chamados, conversas, mensagens, decisões, rascunhos e transferências | Deploy |
+> | Persistência em PostgreSQL de chamados, conversas, mensagens, decisões, rascunhos e transferências | |
 > | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | |
 > | Conversas: criar, listar, histórico, enviar mensagem (SSE) com idempotência, limite de 30 e agente pausado | |
 > | **Agente Mastra** respondendo no stream: central de ajuda, chamados do funcionário, duplicidade, rascunhos (abrir, atualizar, reabrir) e transferência para analista | |
@@ -19,6 +19,7 @@ chamados para confirmação e chama um analista quando precisa.
 > | **Console do analista** (`/api/console/*`): fila de transferidas com filtros e busca, histórico com decisões do agente, chamados do funcionário, assumir, responder, devolver ao agente e encerrar, com concorrência segura | |
 > | **Pedido direto de analista** pelo funcionário (`POST .../handoff`), sem LLM, atômico e idempotente | |
 > | **Eventos em tempo real para o funcionário** (`GET .../events`): mensagens do analista e mudanças de estado, com recuperação na reconexão | |
+> | **Interface web** (React): login (Tela 1), chat com cards, seleção, rascunhos, respostas rápidas e pedido de analista (Telas 2 e 3), painel de decisões do agente, perfil e console do analista (Telas 4 e 5), responsiva | |
 >
 > A lista completa de rotas, implementadas e planejadas, está em [docs/api-contracts.md](docs/api-contracts.md).
 
@@ -63,7 +64,7 @@ A página da web mostra se a API e o banco estão de pé.
 | Comando | O que faz |
 | --- | --- |
 | `npm run dev` | API (tsx watch) e web (Vite) juntas |
-| `npm test` | Testes unitários, de arquitetura e de API (sem banco). No Windows o worker do Vitest cai de vez em quando por um aborto nativo; se aparecer "Worker exited unexpectedly", rode de novo (detalhes em [docs/architecture.md](docs/architecture.md), seção Testes) |
+| `npm test` | Testes unitários, de arquitetura, de API e **de interface** (sem banco; a interface roda em jsdom contra a API real em memória, com o agente e um modelo roteirizado). No Windows o worker do Vitest cai de vez em quando por um aborto nativo; se aparecer "Worker exited unexpectedly", rode de novo (detalhes em [docs/architecture.md](docs/architecture.md), seção Testes) |
 | `npm run test:db` | Integração com PostgreSQL real em banco descartável, criado e removido a cada execução (exige `npm run db:up`); inclui o agente de ponta a ponta com LLM simulado e o console do analista (concorrência) |
 | `npm run test:live` | Avaliação com o modelo **real** (opcional, custa tokens): só roda com `AGENT_LIVE_TEST=1`, `AGENT_MODEL` e a chave do provedor |
 | `npm run db:migrate` | Aplica as migrations ao banco do `.env` |
@@ -135,6 +136,30 @@ provedor do model router do Mastra funciona trocando `AGENT_MODEL` (ex.: `openai
 Custo controlado por resposta: até 6 chamadas ao modelo, 8 execuções de ferramenta, 1.500 tokens de
 saída por chamada, histórico das últimas 24 mensagens, 45 s de tempo máximo e no máximo 4 respostas
 simultâneas por processo (`AGENT_TIMEOUT_MS`, `AGENT_MAX_CONCURRENCY`).
+
+## A interface
+
+`npm run dev` sobe a API e a web (http://localhost:5173). Entre com um usuário de exemplo (qualquer
+senha): `ana.souza@nexo.com.br` vai para o chat; `marcos.oliveira@nexo.com.br` (N1) ou
+`paula.santos@nexo.com.br` (N2), para o console. Tudo o que a tela mostra vem da API: histórico,
+cards, rascunhos, decisões, fila e chamados; nada é simulado no front.
+
+- **Chat (Telas 2 e 3):** lista de conversas e nova conversa, histórico persistido, resposta do agente
+  por SSE com os passos reais aparecendo enquanto ele trabalha, cards de chamado com prioridade, prazo
+  e aviso de vencido, seleção de chamado, respostas rápidas, rascunhos com Confirmar e Descartar,
+  "Falar com um analista", contador de 30 mensagens, estados de carregamento, erro e indisponibilidade
+  com "Tentar de novo".
+- **Transparência:** acima de cada resposta, as ações executadas ("✓ consultou seus chamados");
+  "Ver detalhes da decisão" abre o registro gravado: o que entendeu, intenção, ação, confiança, justificativa,
+  regras do Anexo A e ferramentas com resultado e duração, além de modelo, tokens e latência.
+- **Tempo real:** mensagens do analista e mudanças de estado chegam sem recarregar; a conexão se
+  refaz sozinha e recupera o que perdeu sem duplicar; resposta pendente do agente é retomada ao
+  reabrir a conversa.
+- **Console (Telas 4 e 5):** fila com filtros e busca, resumo e motivo da transferência, histórico com as
+  decisões do agente, chamados do funcionário, assumir, responder, devolver e encerrar; conflitos de
+  versão (outro analista agiu antes) avisam e recarregam o estado real.
+
+Sem streaming de texto: a resposta do agente chega inteira; o tempo real está nos passos.
 
 ## Transferência e console do analista
 

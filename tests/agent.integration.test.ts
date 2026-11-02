@@ -63,7 +63,7 @@ async function startApi(options: AppOptions = {}) {
     api: {
       auth: createAuthService({ users: createPrismaUserRepository(client), secret: SECRET, sessionTtlSeconds: 3600 }),
       tickets,
-      conversations: createConversationService({ conversations: createPrismaConversationRepository(client) }),
+      conversations: createConversationService({ conversations: createPrismaConversationRepository(client), drafts: createPrismaDraftRepository(client) }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(client), tickets }),
       responder: createAgentResponder({
         store: createPrismaAgentTurnStore(client),
@@ -213,6 +213,16 @@ describe('resposta do agente publicada', () => {
     expect(confirmed.status).toBe(200);
     expect(confirmed.body.ticket).toMatchObject({ title: 'Mouse sem fio parou de funcionar', priority: 'MEDIUM', status: 'WAITING_ANALYST' });
     expect(await prisma.ticket.count()).toBe(ticketsBefore + 1);
+
+    // Ao recarregar o histórico, o bloco do rascunho mostra o estado atual, não o retrato PENDING.
+    const reloaded = await detail(api.url, token, id);
+    const reloadedBlock = reloaded.messages.flatMap((m) => m.blocks).find((b) => b.type === 'draft');
+    expect(reloadedBlock?.type === 'draft' && reloadedBlock.draft).toMatchObject({
+      id: draftId,
+      status: 'CONFIRMED',
+      resultTicketCode: confirmed.body.ticket.code,
+      confirmedAt: expect.any(String),
+    });
   });
 
   it('um novo rascunho substitui o pendente anterior da conversa', async () => {

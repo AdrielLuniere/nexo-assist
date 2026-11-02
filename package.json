@@ -20,7 +20,7 @@
     "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @nexo/api\" \"npm run dev -w @nexo/web\"",
     "dev:api": "npm run dev -w @nexo/api",
     "dev:web": "npm run dev -w @nexo/web",
-    "typecheck": "prisma generate && tsc -b && tsc -p tsconfig.test.json",
+    "typecheck": "prisma generate && tsc -b && tsc -p tsconfig.test.json && tsc -p apps/web/tsconfig.test.json",
     "build": "prisma generate && tsc -b && npm run build -w @nexo/web",
     "start:api": "npm run start -w @nexo/api",
     "test": "vitest run",

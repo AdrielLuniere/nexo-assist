@@ -5,6 +5,7 @@ import type {
   Message,
   MessageBlock,
 } from '@nexo/shared';
+import { type InMemoryWorld, appendInMemoryMessage, stripClientId } from '../conversations/conversation-repository.js';
 import { MESSAGE_INCLUDE, insertMessage, lockConversation, toContractMessage } from '../conversations/message-writer.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { writeSlotsFor } from '../infra/write-slots.js';
@@ -129,7 +130,11 @@ export interface InMemoryDraftRepository extends DraftRepository {
   failNextMarkExecuted(): void;
 }
 
-export function createInMemoryDraftRepository(now: () => Date = () => new Date()): InMemoryDraftRepository {
+/**
+ * Com `world`, os rascunhos enxergam o estado atual da conversa e a mensagem de resultado entra no
+ * histórico da conversa em memória, como no PostgreSQL (usado pelos testes de interface).
+ */
+export function createInMemoryDraftRepository(now: () => Date = () => new Date(), world?: InMemoryWorld): InMemoryDraftRepository {
   const drafts = new Map<string, DraftRecord>();
   const messages = new Map<string, Message>();
   let failMark = false;
@@ -144,7 +149,10 @@ export function createInMemoryDraftRepository(now: () => Date = () => new Date()
       failMark = true;
     },
     async findById(id) {
-      return drafts.get(id) ?? null;
+      const draft = drafts.get(id);
+      if (!draft) return null;
+      const conversation = world?.conversations.get(draft.conversationId);
+      return conversation ? { ...draft, conversationOwnerId: conversation.employeeId, conversationStatus: conversation.status } : draft;
     },
     async transition(id, from, to, at) {
       const draft = drafts.get(id);
@@ -170,6 +178,13 @@ export function createInMemoryDraftRepository(now: () => Date = () => new Date()
       const key = resultMessageKey(input.draftId);
       const existing = messages.get(key);
       if (existing) return existing;
+      const conversation = world?.conversations.get(input.conversationId);
+      if (world && conversation) {
+        const { message, at } = appendInMemoryMessage(world, conversation, 'AGENT', null, input.content, key, now(), { blocks: input.blocks });
+        world.conversations.set(conversation.id, { ...conversation, lastMessageAt: at, updatedAt: at });
+        messages.set(key, stripClientId(message));
+        return stripClientId(message);
+      }
       const message: Message = {
         id: `msg_${++counter}`,
         conversationId: input.conversationId,

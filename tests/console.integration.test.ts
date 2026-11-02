@@ -74,7 +74,7 @@ async function startApi(options: ApiOptions = {}) {
     api: {
       auth: createAuthService({ users: createPrismaUserRepository(client), secret: SECRET, sessionTtlSeconds: 3600 }),
       tickets,
-      conversations: createConversationService({ conversations }),
+      conversations: createConversationService({ conversations, drafts: createPrismaDraftRepository(client) }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(client), tickets }),
       ...(options.withoutAgent
         ? {}
@@ -88,7 +88,7 @@ async function startApi(options: ApiOptions = {}) {
               logger,
             }),
           }),
-      console: createConsoleService({ console: createPrismaConsoleRepository(client), conversations, tickets, events }),
+      console: createConsoleService({ console: createPrismaConsoleRepository(client), conversations, tickets, events, drafts: createPrismaDraftRepository(client) }),
       events,
       handoffs: createHandoffRequestService({ handoffs: createPrismaHandoffRequestRepository(client), conversations, events }),
     },

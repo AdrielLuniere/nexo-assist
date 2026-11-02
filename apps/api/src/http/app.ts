@@ -24,7 +24,7 @@ export function createApp(deps: AppDeps): Express {
   app.use(express.json({ limit: '32kb' }));
 
   app.use(healthRouter(deps));
-  if (deps.api) app.use('/api', apiRouter(deps.api));
+  if (deps.api) app.use('/api', apiRouter(deps.api, deps.logger));
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(deps.logger));

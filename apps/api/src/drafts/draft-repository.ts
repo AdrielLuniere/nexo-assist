@@ -5,7 +5,9 @@ import type {
   Message,
   MessageBlock,
 } from '@nexo/shared';
-import { Prisma, type PrismaClient } from '../generated/prisma/client.js';
+import { MESSAGE_INCLUDE, insertMessage, lockConversation, toContractMessage } from '../conversations/message-writer.js';
+import type { PrismaClient } from '../generated/prisma/client.js';
+import { writeSlotsFor } from '../infra/write-slots.js';
 
 /**
  * Persistência dos rascunhos (tabela `ticket_drafts`, propriedade da API) e da mensagem que registra
@@ -46,25 +48,6 @@ export interface DraftRepository {
   revertToPending(id: string): Promise<boolean>;
   /** Mensagem do agente com o resultado. Idempotente por rascunho: repetir devolve a mesma mensagem. */
   recordResultMessage(input: ResultMessageInput): Promise<Message>;
-}
-
-function toMessage(row: {
-  id: string;
-  conversationId: string;
-  content: string;
-  blocks: unknown;
-  createdAt: Date;
-}): Message {
-  return {
-    id: row.id,
-    conversationId: row.conversationId,
-    role: 'AGENT',
-    authorId: null,
-    content: row.content,
-    blocks: row.blocks as MessageBlock[],
-    decisionId: null,
-    createdAt: row.createdAt.toISOString(),
-  };
 }
 
 const resultMessageKey = (draftId: string) => `draft-result:${draftId}`;
@@ -119,32 +102,22 @@ export function createPrismaDraftRepository(prisma: PrismaClient): DraftReposito
     },
 
     async recordResultMessage(input) {
-      const key = { conversationId_clientMessageId: { conversationId: input.conversationId, clientMessageId: resultMessageKey(input.draftId) } };
-      const existing = await prisma.message.findUnique({ where: key });
-      if (existing) return toMessage(existing);
-      try {
-        const row = await prisma.$transaction(async (tx) => {
-          const created = await tx.message.create({
-            data: {
-              conversationId: input.conversationId,
-              role: 'AGENT',
-              content: input.content,
-              blocks: input.blocks as unknown as Prisma.InputJsonValue,
-              clientMessageId: resultMessageKey(input.draftId),
-            },
-          });
-          await tx.conversation.update({ where: { id: input.conversationId }, data: { lastMessageAt: created.createdAt } });
-          return created;
-        });
-        return toMessage(row);
-      } catch (error) {
-        // Outra confirmação concorrente gravou primeiro: devolve a mensagem dela.
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-          const winner = await prisma.message.findUnique({ where: key });
-          if (winner) return toMessage(winner);
-        }
-        throw error;
-      }
+      const clientMessageId = resultMessageKey(input.draftId);
+      const key = { conversationId_clientMessageId: { conversationId: input.conversationId, clientMessageId } };
+      const row = await writeSlotsFor(prisma).run(() => prisma.$transaction(async (tx) => {
+        // Mesma trava e mesma ordenação das mensagens do funcionário (ver conversations/message-writer.ts).
+        const conversation = await lockConversation(tx, input.conversationId);
+        if (!conversation) throw new Error('conversa do rascunho não encontrada');
+        const existing = await tx.message.findUnique({ where: key, include: MESSAGE_INCLUDE });
+        if (existing) return existing;
+        return insertMessage(
+          tx,
+          conversation,
+          { role: 'AGENT', authorId: null, content: input.content, blocks: input.blocks, clientMessageId },
+          new Date(),
+        );
+      }, { maxWait: 10_000, timeout: 15_000 }));
+      return toContractMessage(row);
     },
   };
 }

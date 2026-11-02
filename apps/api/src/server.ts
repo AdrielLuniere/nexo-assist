@@ -4,6 +4,8 @@ import { randomBytes } from 'node:crypto';
 import { createAuthService } from './auth/auth-service.js';
 import { createPrismaUserRepository } from './auth/user-repository.js';
 import { EnvValidationError, loadEnv } from './config/env.js';
+import { createPrismaConversationRepository } from './conversations/conversation-repository.js';
+import { createConversationService } from './conversations/conversation-service.js';
 import { createDraftService } from './drafts/draft-service.js';
 import { createPrismaDraftRepository } from './drafts/draft-repository.js';
 import { createApp } from './http/app.js';
@@ -39,6 +41,7 @@ function main(): void {
         sessionTtlSeconds: env.AUTH_SESSION_TTL_MINUTES * 60,
       }),
       tickets,
+      conversations: createConversationService({ conversations: createPrismaConversationRepository(prisma) }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(prisma), tickets }),
     },
   });

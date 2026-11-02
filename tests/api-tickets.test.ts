@@ -1,14 +1,14 @@
 import { ApiErrorBodySchema, TicketDetailSchema, TicketSummarySchema } from '@nexo/shared';
 import { TicketServiceError } from '@nexo/ticket-service';
-import request from 'supertest';
+import { type TestResponse, request } from './helpers/http.js';
 import { describe, expect, it } from 'vitest';
 import { ANA, BRUNO, bearer, buildHarness } from './helpers/api-harness.js';
 
-const errorOf = (res: request.Response) => ApiErrorBodySchema.parse(res.body).error;
+const errorOf = (res: TestResponse) => ApiErrorBodySchema.parse(res.body).error;
 
 describe('GET /api/tickets', () => {
   it('lista só os chamados do funcionário autenticado, com vencimento', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await request(h.app).get('/api/tickets').set(bearer(await h.login(ANA)));
 
     expect(res.status).toBe(200);
@@ -20,13 +20,13 @@ describe('GET /api/tickets', () => {
   });
 
   it('cada funcionário vê apenas os seus', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await request(h.app).get('/api/tickets').set(bearer(await h.login(BRUNO)));
     expect((res.body.items as Array<{ code: string }>).map((t) => t.code)).toEqual(['INC-20344']);
   });
 
   it('ignora qualquer tentativa do cliente de informar outro funcionário', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const res = await request(h.app)
       .get('/api/tickets')
@@ -37,7 +37,7 @@ describe('GET /api/tickets', () => {
   });
 
   it('exige login', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const res = await request(app).get('/api/tickets');
     expect(res.status).toBe(401);
     expect(errorOf(res).code).toBe('UNAUTHENTICATED');
@@ -46,7 +46,7 @@ describe('GET /api/tickets', () => {
 
 describe('GET /api/tickets/:ticketCode', () => {
   it('devolve o detalhe do próprio chamado com histórico', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await request(h.app).get('/api/tickets/INC-20311').set(bearer(await h.login(ANA)));
     expect(res.status).toBe(200);
     const ticket = TicketDetailSchema.parse(res.body.ticket);
@@ -54,7 +54,7 @@ describe('GET /api/tickets/:ticketCode', () => {
   });
 
   it('chamado de outro funcionário é indistinguível de chamado inexistente', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const foreign = await request(h.app).get('/api/tickets/INC-20344').set(bearer(token));
     const missing = await request(h.app).get('/api/tickets/INC-99999').set(bearer(token));
@@ -67,28 +67,28 @@ describe('GET /api/tickets/:ticketCode', () => {
   });
 
   it('código malformado responde VALIDATION_ERROR', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await request(h.app).get('/api/tickets/qualquer-coisa').set(bearer(await h.login(ANA)));
     expect(res.status).toBe(400);
     expect(errorOf(res).code).toBe('VALIDATION_ERROR');
   });
 
   it('exige login', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     expect((await request(app).get('/api/tickets/INC-20311')).status).toBe(401);
   });
 });
 
 describe('falhas do sistema de chamados', () => {
   it('queda curta é absorvida pelas retentativas e a requisição dá certo', async () => {
-    const h = buildHarness({ outages: { outageFor: ({ callNumber }) => (callNumber <= 2 ? 'before' : null) } });
+    const h = await buildHarness({ outages: { outageFor: ({ callNumber }) => (callNumber <= 2 ? 'before' : null) } });
     const res = await request(h.app).get('/api/tickets').set(bearer(await h.login(ANA)));
     expect(res.status).toBe(200);
     expect(res.body.items).toHaveLength(3);
   });
 
   it('queda longa responde 503 repetível, com Retry-After e sem detalhes internos', async () => {
-    const h = buildHarness({ outages: { outageFor: () => 'before' } });
+    const h = await buildHarness({ outages: { outageFor: () => 'before' } });
     const res = await request(h.app).get('/api/tickets/INC-20311').set(bearer(await h.login(ANA)));
     expect(res.status).toBe(503);
     expect(errorOf(res)).toMatchObject({ code: 'TICKET_SERVICE_UNAVAILABLE', retryable: true });
@@ -96,7 +96,7 @@ describe('falhas do sistema de chamados', () => {
   });
 
   it('erro inesperado vira 500 genérico: nada interno vaza, e vai para o log', async () => {
-    const h = buildHarness({
+    const h = await buildHarness({
       ticketServiceOverride: (real) => ({
         ...real,
         listForRequester: async () => {
@@ -112,7 +112,7 @@ describe('falhas do sistema de chamados', () => {
   });
 
   it('o log de erros não registra o token de sessão', async () => {
-    const h = buildHarness({
+    const h = await buildHarness({
       ticketServiceOverride: (real) => ({
         ...real,
         listForRequester: async () => {
@@ -137,7 +137,7 @@ describe('falhas do sistema de chamados', () => {
       ['UNAVAILABLE', 503, 'TICKET_SERVICE_UNAVAILABLE'],
     ];
     for (const [code, status, apiCode] of cases) {
-      const h = buildHarness({
+      const h = await buildHarness({
         retry: false,
         ticketServiceOverride: (real) => ({
           ...real,

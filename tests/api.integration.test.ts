@@ -1,9 +1,11 @@
 import { ApiErrorBodySchema, DraftConfirmationResponseSchema, type DraftPayload, type TicketFields } from '@nexo/shared';
 import type { Express } from 'express';
-import request from 'supertest';
+import { type TestResponse, request } from './helpers/http.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAuthService } from '../apps/api/src/auth/auth-service.js';
 import { createPrismaUserRepository } from '../apps/api/src/auth/user-repository.js';
+import { createPrismaConversationRepository } from '../apps/api/src/conversations/conversation-repository.js';
+import { createConversationService } from '../apps/api/src/conversations/conversation-service.js';
 import { createPrismaDraftRepository } from '../apps/api/src/drafts/draft-repository.js';
 import { createDraftService } from '../apps/api/src/drafts/draft-service.js';
 import { createApp } from '../apps/api/src/http/app.js';
@@ -11,6 +13,7 @@ import { createLegacyTicketService } from '../apps/api/src/infra/ticket-service.
 import { createPrismaClient, type PrismaClient } from '../apps/api/src/infra/prisma.js';
 import { seedDatabase } from '../apps/api/src/seed/seed.js';
 import { type DisposableDatabase, createDisposableDatabase } from './helpers/disposable-database.js';
+import { serve } from './helpers/api-harness.js';
 
 /**
  * API HTTP completa sobre PostgreSQL real, em um banco descartável criado só para este arquivo.
@@ -26,7 +29,7 @@ const BRUNO_ID = 'usr_bruno_lima';
 
 let db: DisposableDatabase;
 let prisma: PrismaClient;
-let app: Express;
+let app: string;
 
 const FIELDS: TicketFields = {
   type: 'INC',
@@ -77,6 +80,7 @@ function buildApp(client: PrismaClient): Express {
     api: {
       auth: createAuthService({ users: createPrismaUserRepository(client), secret: SECRET, sessionTtlSeconds: 3600 }),
       tickets,
+      conversations: createConversationService({ conversations: createPrismaConversationRepository(client) }),
       drafts: createDraftService({ drafts: createPrismaDraftRepository(client), tickets }),
     },
   });
@@ -92,7 +96,7 @@ beforeAll(async () => {
       { id: 'conv_bruno', employeeId: BRUNO_ID },
     ],
   });
-  app = buildApp(prisma);
+  app = await serve(buildApp(prisma), 'file');
 }, 90_000);
 
 afterAll(async () => {
@@ -224,7 +228,7 @@ describe('banco indisponível', () => {
   it('responde 503 DATABASE_UNAVAILABLE sem vazar credenciais', async () => {
     const dead = createPrismaClient('postgresql://ninguem:senha-secreta@127.0.0.1:1/inexistente');
     try {
-      const res = await request(buildApp(dead)).post('/api/auth/login').send({ email: ANA, password: 'x' });
+      const res = await request(await serve(buildApp(dead))).post('/api/auth/login').send({ email: ANA, password: 'x' });
       expect(res.status).toBe(503);
       expect(ApiErrorBodySchema.parse(res.body).error).toMatchObject({ code: 'DATABASE_UNAVAILABLE', retryable: true });
       expect(res.text).not.toMatch(/senha-secreta|127\.0\.0\.1|inexistente/);

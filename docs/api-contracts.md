@@ -16,10 +16,10 @@ schemas Zod usados pela API (validação) e pela web (parsing). Este documento �
 | GET | `/health` | público | JSON | implementada | Saúde da API e do banco (200 ou 503) |
 | POST | `/api/auth/login` | público | JSON | **implementada** | Login com e-mail corporativo (Tela 1) |
 | GET | `/api/auth/me` | qualquer usuário logado | JSON | **implementada** | Usuário autenticado (funcionário ou analista) |
-| GET | `/api/conversations` | funcionário | JSON | planejada | Conversas do funcionário (continuar de onde parou) |
-| POST | `/api/conversations` | funcionário | JSON | planejada | Nova conversa |
-| GET | `/api/conversations/:conversationId` | funcionário | JSON | planejada | Histórico com decisões do agente |
-| POST | `/api/conversations/:conversationId/messages` | funcionário | SSE | planejada | Envia mensagem; resposta em streaming |
+| GET | `/api/conversations` | funcionário | JSON | **implementada** | Conversas do funcionário (continuar de onde parou) |
+| POST | `/api/conversations` | funcionário | JSON | **implementada** | Nova conversa |
+| GET | `/api/conversations/:conversationId` | funcionário | JSON | **implementada** | Histórico com decisões do agente |
+| POST | `/api/conversations/:conversationId/messages` | funcionário | SSE | **implementada** (sem agente) | Grava a mensagem e abre o stream; o agente responde em fase futura |
 | GET | `/api/conversations/:conversationId/events` | funcionário | SSE | planejada | Mensagens do analista e mudanças de estado |
 | POST | `/api/conversations/:conversationId/drafts/:draftId/confirm` | funcionário | JSON | **implementada** | Confirma o rascunho e escreve no serviço de chamados (idempotente) |
 | POST | `/api/conversations/:conversationId/drafts/:draftId/discard` | funcionário | JSON | **implementada** | Descarta o rascunho |
@@ -33,13 +33,73 @@ schemas Zod usados pela API (validação) e pela web (parsing). Este documento �
 | POST | `/api/console/conversations/:conversationId/close` | analista | JSON | planejada | Encerra |
 | POST | `/api/console/conversations/:conversationId/messages` | analista | JSON | planejada | Mensagem do analista |
 
-Continuam **planejadas**: conversas (criar, listar, ler, enviar mensagem, eventos), transferência
+Continuam **planejadas**: `GET /api/conversations/:id/events` (mensagens do analista), transferência
 para analista e todo o console do analista. A consulta de duplicidades não é uma rota: está prevista
 só no serviço (`findPossibleDuplicates`) e é usada pelo agente em fase futura; a criação já recusa
 duplicados (`DUPLICATE_TICKET`).
 
 Não existe rota de escrita direta de chamados (`POST/PUT/PATCH/DELETE /api/tickets`): chamados só
 são criados, atualizados ou reabertos pela confirmação de um rascunho.
+
+## Conversas e mensagens
+
+Todas as rotas são de funcionário (analista recebe `403`) e só enxergam conversas do usuário da
+sessão. Conversa inexistente e conversa de outra pessoa respondem o **mesmo** `404`; nenhum
+identificador de funcionário, papel ou autor vindo do cliente é lido.
+
+- `GET /api/conversations` devolve `{ items: ConversationSummary[] }`, da mais recente para a mais
+  antiga (por `lastMessageAt`; conversas sem mensagens por último), no máximo 100.
+- `POST /api/conversations` devolve `{ conversation }` (`ConversationDetail`). Responde `201` ao criar
+  e `200` quando já existia uma conversa **vazia** do funcionário, que é reaproveitada: duplo clique
+  ou duas abas não geram conversas vazias duplicadas.
+- `GET /api/conversations/:id` devolve a conversa com todas as mensagens (em ordem de envio) e as
+  decisões do agente. É o que permite "voltar outro dia e continuar de onde parou".
+- O título da conversa é a primeira mensagem do funcionário (até 60 caracteres, sem IA).
+
+### Enviar mensagem (`POST .../messages`)
+
+Corpo: `{ content, clientMessageId }` (texto de 1 a 2000 caracteres após `trim`; `clientMessageId` é
+um UUID gerado pelo cliente).
+
+Tudo que pode falhar é decidido **antes** de abrir o stream, então vira um erro JSON comum:
+
+| Situação | Resposta |
+| --- | --- |
+| corpo inválido | `400 VALIDATION_ERROR` |
+| conversa inexistente ou de outra pessoa | `404 NOT_FOUND` |
+| conversa encerrada | `409 INVALID_STATE_TRANSITION` |
+| 31ª mensagem do funcionário na conversa | `429 MESSAGE_LIMIT_REACHED` |
+
+Se a mensagem é aceita, a resposta é `text/event-stream` com eventos `ChatStreamEvent`:
+
+```
+message.accepted → [conversation.status] → [agent.step* → agent.delta* → agent.message] → [error] → done
+```
+
+- `message.accepted` traz a mensagem gravada (a do funcionário, com `id` e `createdAt` do servidor).
+- `conversation.status` só aparece quando a conversa **não** está com o agente (`WAITING_ANALYST` ou
+  `WITH_ANALYST`): a mensagem é gravada para o analista ler, o agente não responde, e a interface
+  fica sabendo.
+- Os eventos do agente só existem quando o agente responde: conversa `WITH_AGENT` e mensagem nova.
+  **Nesta fase não há agente**, então o stream termina em `message.accepted → done`. A porta
+  `AgentResponder` (`apps/api/src/conversations/responder.ts`) é onde o agente se liga depois; cada
+  evento que ele devolve é validado contra o contrato antes de sair.
+- Falha do agente depois de aberto o stream vira o evento `error` (`AGENT_UNAVAILABLE`, repetível,
+  sem detalhes internos) seguido de `done`. A mensagem do funcionário continua gravada.
+
+Regras garantidas no servidor:
+
+- **Idempotência por `clientMessageId`** (único por conversa). Reenviar devolve a mensagem original,
+  com o texto original (mesmo que o novo texto seja diferente), sem consumir o limite e sem acionar o
+  agente de novo. O mesmo `clientMessageId` em outra conversa, ou de outro funcionário, é uma
+  mensagem nova.
+- **Limite de 30 mensagens do funcionário por conversa** ("sessão" = conversa). Vale sob concorrência:
+  40 envios simultâneos aceitam exatamente 30. Mensagens do agente e do analista não contam.
+- **Ordenação estável:** as escritas de uma conversa são serializadas e `createdAt` é estritamente
+  crescente dentro dela, mesmo com relógio parado ou escritas simultâneas (inclusive a mensagem de
+  resultado de um rascunho). O histórico é lido por `createdAt`.
+- O funcionário pode escrever enquanto a conversa não está encerrada, inclusive durante o
+  atendimento humano.
 
 ## Autenticação
 

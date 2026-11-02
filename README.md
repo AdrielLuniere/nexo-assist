@@ -4,19 +4,22 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.3 (autenticação, API de chamados e confirmação de rascunhos).**
+> **Status: P0.4 (conversas e persistência do chat).**
 >
 > | Implementado | Planejado |
 > | --- | --- |
-> | Monorepo, contratos, fronteiras entre pacotes, `GET /health` | Rotas `/api` (login, conversas, chamados, console) |
-> | Migration inicial e seed de exemplo | Agente com ferramentas e streaming |
+> | Monorepo, contratos, fronteiras entre pacotes, `GET /health` | Rotas do console do analista (`/api/console/*`) e transferência |
+> | Migration inicial e seed de exemplo | Agente (Mastra) com ferramentas, respondendo no stream |
 > | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | Telas do protótipo (chat e console) |
-> | Persistência do serviço de chamados em PostgreSQL | Persistência de conversas e mensagens (as tabelas existem; falta o código) |
-> | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | Console do analista e transferência |
-> | `GET /api/tickets`, `GET /api/tickets/:code`, confirmar e descartar rascunho | Streaming do chat |
+> | Persistência em PostgreSQL de chamados, conversas e mensagens | Mensagens do analista em tempo real (`/events`) |
+> | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | Telas do protótipo e console do analista |
+> | `GET /api/tickets`, `GET /api/tickets/:code`, confirmar e descartar rascunho | Deploy |
+> | Conversas: criar, listar, recuperar histórico; enviar mensagem (SSE) com idempotência, limite de 30 e agente pausado | |
 >
-> Não existe criação de rascunhos pela API: quem os propõe é o agente (fase futura). Veja a lista
-> completa de rotas, implementadas e planejadas, em [docs/api-contracts.md](docs/api-contracts.md).
+> Hoje o stream de `POST .../messages` só confirma o recebimento (`message.accepted` e `done`), porque
+> o agente ainda não existe. Não existe criação de rascunhos pela API: quem os propõe é o agente
+> (fase futura). A lista
+> completa de rotas, implementadas e planejadas, está em [docs/api-contracts.md](docs/api-contracts.md).
 
 ## Como rodar
 
@@ -49,7 +52,7 @@ A página da web mostra se a API e o banco estão de pé.
 | Comando | O que faz |
 | --- | --- |
 | `npm run dev` | API (tsx watch) e web (Vite) juntas |
-| `npm test` | Testes unitários e de arquitetura (sem banco) |
+| `npm test` | Testes unitários, de arquitetura e de API (sem banco). No Windows o worker do Vitest cai de vez em quando por um aborto nativo; se aparecer "Worker exited unexpectedly", rode de novo (detalhes em [docs/architecture.md](docs/architecture.md), seção Testes) |
 | `npm run test:db` | Integração com PostgreSQL real em banco descartável, criado e removido a cada execução (exige `npm run db:up`) |
 | `npm run db:migrate` | Aplica as migrations ao banco do `.env` |
 | `npm run db:seed -- --confirm` | Insere os dados de exemplo no banco do `.env` |

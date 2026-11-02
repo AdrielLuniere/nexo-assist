@@ -11,6 +11,7 @@ import {
 } from '@nexo/ticket-service';
 import { Prisma, type PrismaClient } from '../generated/prisma/client.js';
 import { isTransientDatabaseError } from './prisma-errors.js';
+import { writeSlotsFor } from './write-slots.js';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -139,7 +140,10 @@ export function createPrismaTicketStore(prisma: PrismaClient): TicketStore {
   return {
     ...opsOver(prisma),
     async transaction(work) {
-      return guarded(() => prisma.$transaction((tx) => work(opsOver(tx)), { maxWait: 5_000, timeout: 15_000 }));
+      // Transações do serviço esperam a trava por solicitante: a espera é em memória (ver write-slots.ts).
+      return writeSlotsFor(prisma).run(() =>
+        guarded(() => prisma.$transaction((tx) => work(opsOver(tx)), { maxWait: 10_000, timeout: 15_000 })),
+      );
     },
   };
 }

@@ -1,6 +1,6 @@
 import { ApiErrorBodySchema, LoginResponseSchema, UserSchema } from '@nexo/shared';
 import express from 'express';
-import request from 'supertest';
+import { type TestResponse, request } from './helpers/http.js';
 import { describe, expect, it } from 'vitest';
 import { createAuthService } from '../apps/api/src/auth/auth-service.js';
 import { createInMemoryUserRepository } from '../apps/api/src/auth/user-repository.js';
@@ -9,13 +9,13 @@ import { authenticate, requireRole } from '../apps/api/src/http/middleware/authe
 import { requestId } from '../apps/api/src/http/middleware/request-id.js';
 import { ANA, MARCOS, PAULA, SECRET, USERS, bearer, buildHarness } from './helpers/api-harness.js';
 
-function errorOf(res: request.Response) {
+function errorOf(res: TestResponse) {
   return ApiErrorBodySchema.parse(res.body).error;
 }
 
 describe('POST /api/auth/login', () => {
   it('autentica funcionário e analistas dos dados de exemplo com qualquer senha', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     for (const user of USERS) {
       const res = await request(app).post('/api/auth/login').send({ email: user.email, password: 'qualquer-coisa' });
       expect(res.status).toBe(200);
@@ -26,7 +26,7 @@ describe('POST /api/auth/login', () => {
   });
 
   it('devolve papel e nível: N1 e N2 para analistas, nulo para funcionário', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const login = async (email: string) =>
       (await request(app).post('/api/auth/login').send({ email, password: 'x' })).body.user as { role: string; analystLevel: string | null };
     expect(await login(ANA.email)).toMatchObject({ role: 'EMPLOYEE', analystLevel: null });
@@ -35,14 +35,14 @@ describe('POST /api/auth/login', () => {
   });
 
   it('ignora caixa do e-mail e a expiração segue a configuração', async () => {
-    const { app, clock } = buildHarness({ sessionTtlSeconds: 600 });
+    const { app, clock } = await buildHarness({ sessionTtlSeconds: 600 });
     const res = await request(app).post('/api/auth/login').send({ email: 'ANA.Souza@NEXO.com.br', password: 'x' });
     expect(res.status).toBe(200);
     expect(new Date(res.body.expiresAt as string).getTime()).toBe(clock.current.getTime() + 600_000);
   });
 
   it('e-mail desconhecido e senha só com espaços recebem a mesma resposta genérica', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const unknown = await request(app).post('/api/auth/login').send({ email: 'ninguem@nexo.com.br', password: 'x' });
     const blank = await request(app).post('/api/auth/login').send({ email: ANA.email, password: '   ' });
     expect(unknown.status).toBe(401);
@@ -52,7 +52,7 @@ describe('POST /api/auth/login', () => {
   });
 
   it('rejeita corpo inválido com VALIDATION_ERROR, sem ecoar a senha', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const bad = [
       {},
       { email: ANA.email },
@@ -70,7 +70,7 @@ describe('POST /api/auth/login', () => {
   });
 
   it('não devolve credenciais nem usa cache; não há campo de senha na resposta', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const res = await request(app).post('/api/auth/login').send({ email: ANA.email, password: 'minha-senha-123' });
     expect(res.headers['cache-control']).toBe('no-store');
     expect(JSON.stringify(res.body)).not.toContain('minha-senha-123');
@@ -80,14 +80,14 @@ describe('POST /api/auth/login', () => {
 
 describe('GET /api/auth/me e sessão', () => {
   it('devolve o usuário da sessão', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await request(h.app).get('/api/auth/me').set(bearer(await h.login(MARCOS)));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ user: MARCOS });
   });
 
   it('sem credenciais responde 401 UNAUTHENTICATED com WWW-Authenticate', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const res = await request(app).get('/api/auth/me');
     expect(res.status).toBe(401);
     expect(errorOf(res).code).toBe('UNAUTHENTICATED');
@@ -100,14 +100,14 @@ describe('GET /api/auth/me e sessão', () => {
     ['lixo', 'Bearer isto-nao-e-um-token'],
     ['token gigante', `Bearer ${'a'.repeat(5000)}`],
   ])('sessão inválida: %s', async (_name, header) => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const res = await request(app).get('/api/auth/me').set('authorization', header);
     expect(res.status).toBe(401);
     expect(errorOf(res).code).toBe('UNAUTHENTICATED');
   });
 
   it('token adulterado (trocando o usuário no payload) é recusado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const [version, , signature] = (await h.login(ANA)).split('.');
     const forged = Buffer.from(JSON.stringify({ sub: MARCOS.id, iat: 0, exp: 9_999_999_999 })).toString('base64url');
     const res = await request(h.app).get('/api/auth/me').set(bearer(`${version}.${forged}.${signature}`));
@@ -115,7 +115,7 @@ describe('GET /api/auth/me e sessão', () => {
   });
 
   it('sessão expirada pede novo login, com mensagem própria', async () => {
-    const h = buildHarness({ sessionTtlSeconds: 60 });
+    const h = await buildHarness({ sessionTtlSeconds: 60 });
     const token = await h.login(ANA);
     h.clock.current = new Date(h.clock.current.getTime() + 61_000);
     const res = await request(h.app).get('/api/auth/me').set(bearer(token));
@@ -144,7 +144,7 @@ describe('GET /api/auth/me e sessão', () => {
 
 describe('autorização por papel', () => {
   it('analista não acessa rotas de funcionário', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(MARCOS);
     for (const res of [
       await request(h.app).get('/api/tickets').set(bearer(token)),
@@ -158,7 +158,7 @@ describe('autorização por papel', () => {
   });
 
   it('requireRole("ANALYST") barra funcionário e libera analista (base do console)', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const auth = createAuthService({ users: createInMemoryUserRepository(USERS), secret: SECRET, sessionTtlSeconds: 3600, now: () => h.clock.current });
     const app = express();
     app.use(requestId);
@@ -173,7 +173,7 @@ describe('autorização por papel', () => {
   });
 
   it('rotas desconhecidas de /api continuam 404 estruturado, sem exigir login', async () => {
-    const { app } = buildHarness();
+    const { app } = await buildHarness();
     const res = await request(app).get('/api/nao-existe');
     expect(res.status).toBe(404);
     expect(errorOf(res).code).toBe('NOT_FOUND');

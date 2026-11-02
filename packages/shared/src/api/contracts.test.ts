@@ -17,7 +17,7 @@ describe('catálogo de rotas', () => {
     }
   });
 
-  it('lista exatamente as rotas implementadas até a P0.3', () => {
+  it('lista exatamente as rotas implementadas até a P0.4', () => {
     expect(
       routes
         .filter((route) => route.status === 'implemented')
@@ -28,6 +28,10 @@ describe('catálogo de rotas', () => {
         'GET /health',
         'POST /api/auth/login',
         'GET /api/auth/me',
+        'GET /api/conversations',
+        'POST /api/conversations',
+        'GET /api/conversations/:conversationId',
+        'POST /api/conversations/:conversationId/messages',
         'GET /api/tickets',
         'GET /api/tickets/:ticketCode',
         'POST /api/conversations/:conversationId/drafts/:draftId/confirm',

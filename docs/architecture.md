@@ -117,6 +117,33 @@ traduzem HTTP; nenhuma regra do Anexo A vive nelas.
 - **Sessão**: token HMAC com expiração; papel relido do banco a cada requisição (ver
   `docs/api-contracts.md`, seção "Autenticação").
 
+## Conversas e persistência do chat (P0.4)
+
+Módulo [`apps/api/src/conversations/`](../apps/api/src/conversations): serviço
+(`conversation-service.ts`), repositório (`conversation-repository.ts`, Prisma e em memória) e escritor
+de mensagens (`message-writer.ts`). Usa as tabelas que já existiam (`conversations`, `messages`,
+`agent_decisions`); não há estrutura paralela.
+
+- **Uma trava por conversa.** Toda escrita em `messages` roda numa transação que começa com
+  `SELECT ... FOR UPDATE` na linha da conversa. Isso dá, de uma vez: contador de mensagens e limite
+  corretos sem corrida, idempotência por `clientMessageId` (checada já sob a trava) e `createdAt`
+  estritamente crescente. O fluxo de rascunhos usa o mesmo escritor.
+- **Esperar a trava não pode esgotar o pool.** Uma transação que espera `FOR UPDATE` ou advisory lock
+  segura uma conexão. Em rajadas (40 envios simultâneos na mesma conversa) isso esgotava o pool de 10
+  conexões e devolvia `503` para a maioria, mesmo com os dados corretos. `infra/write-slots.ts` limita a
+  5 as transações com trava em andamento por cliente Prisma; as demais esperam em memória, sem
+  conexão, e sobra pool para leituras. Vale para conversas, rascunhos e o serviço de chamados. A trava
+  do banco segue sendo a garantia entre processos.
+- **Dono na própria consulta.** O repositório sempre filtra por `employeeId` da sessão (inclusive na
+  trava), então a conversa de outra pessoa nem chega a ser lida.
+- **Estado.** `employeeCanWrite` e `agentCanRespond` (shared) decidem se grava e se o agente pode
+  responder. A mudança de estado em si (transferir, assumir, devolver, encerrar) é do console e do
+  agente, em fases futuras.
+- **Porta do agente.** `AgentResponder` devolve eventos de streaming; a rota só a aciona para
+  mensagem nova em conversa `WITH_AGENT`. `noAgentResponder` é o padrão enquanto o agente não existe.
+- **Dado corrompido não derruba.** Blocos de mensagem que não validam são lidos como lista vazia (o
+  texto da mensagem permanece).
+
 ## Regras
 
 Parâmetros em [`packages/shared/src/domain/rules.ts`](../packages/shared/src/domain/rules.ts).
@@ -167,7 +194,17 @@ os passos acima da resposta e o detalhe ao expandir.
 
 - `npm test`: unitários, de arquitetura e HTTP, sem banco (serviços sobre repositórios em memória; a
   API é exercitada com supertest).
-- `npm run test:db`: integração com PostgreSQL real (serviço de chamados e API completa). Cada
+- Os testes de API usam um cliente fino sobre `fetch` ([`tests/helpers/http.ts`](../tests/helpers/http.ts),
+  mesma sintaxe do supertest) e servem cada app em um único servidor (`serve` em
+  `tests/helpers/api-harness.ts`).
+- **Limitação conhecida do ambiente (Windows).** O worker do Vitest às vezes é encerrado pelo sistema
+  com código nativo `0xC0000409` ("Worker exited unexpectedly"), sem erro de JavaScript nem falha de
+  asserção. Medido nesta máquina: supertest + um Express vazio caía em 5 de 40 execuções; com `fetch`,
+  o mesmo volume caiu em 0 de 40; a suíte completa atual fecha limpa em ~96% das execuções (24/25).
+  Não é uma falha dos testes nem da API: basta rodar de novo. Se aparecer em CI, rode em Linux.
+- `npm run test:db`: integração com PostgreSQL real (serviço de chamados, API e conversas), com os
+  arquivos em sequência (`fileParallelism: false`): em paralelo, a disputa por CPU e conexões no mesmo
+  servidor gerava timeouts e quedas de worker alheios ao código. Cada
   arquivo cria um banco descartável
   (`nexo_test_<aleatório>`) no servidor local, aplica a migration nele com `prisma migrate deploy`,
   roda o seed e remove o banco ao final. O banco do `.env` nunca é tocado.

@@ -1,5 +1,5 @@
 import { ApiErrorBodySchema, DraftConfirmationResponseSchema, type TicketFields } from '@nexo/shared';
-import request from 'supertest';
+import { type TestResponse, request } from './helpers/http.js';
 import { describe, expect, it } from 'vitest';
 import {
   ANA,
@@ -15,7 +15,7 @@ import {
   updatePayload,
 } from './helpers/api-harness.js';
 
-const errorOf = (res: request.Response) => ApiErrorBodySchema.parse(res.body).error;
+const errorOf = (res: TestResponse) => ApiErrorBodySchema.parse(res.body).error;
 const confirmUrl = (conversationId: string, draftId: string) => `/api/conversations/${conversationId}/drafts/${draftId}/confirm`;
 const discardUrl = (conversationId: string, draftId: string) => `/api/conversations/${conversationId}/drafts/${draftId}/discard`;
 
@@ -29,7 +29,7 @@ async function ticketCount(h: Harness, who = ANA) {
 
 describe('confirmação válida', () => {
   it('cria o chamado, marca o rascunho e registra a mensagem do agente', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -47,7 +47,7 @@ describe('confirmação válida', () => {
   });
 
   it('atualiza um chamado aberto', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, updatePayload('INC-20311', 'Agora também trava ao abrir o Teams.'));
     const res = await confirm(h, await h.login(ANA), draftId);
     expect(res.status).toBe(200);
@@ -57,7 +57,7 @@ describe('confirmação válida', () => {
   });
 
   it('reabre um chamado resolvido dentro da janela de 7 dias', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, reopenPayload('INC-20150'));
     const res = await confirm(h, await h.login(ANA), draftId);
     expect(res.status).toBe(200);
@@ -67,7 +67,7 @@ describe('confirmação válida', () => {
 
 describe('idempotência e concorrência', () => {
   it('confirmar de novo devolve o mesmo chamado e a mesma mensagem, sem duplicar', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -83,7 +83,7 @@ describe('idempotência e concorrência', () => {
   });
 
   it('confirmações simultâneas criam um único chamado e todas recebem o mesmo resultado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -95,7 +95,7 @@ describe('idempotência e concorrência', () => {
   });
 
   it('confirmar e descartar ao mesmo tempo: exatamente um resultado prevalece', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -118,7 +118,7 @@ describe('idempotência e concorrência', () => {
 describe('falha entre marcar como confirmado e efetivar', () => {
   it('sistema fora do ar: devolve 503, mantém CONFIRMED e a retentativa conclui', async () => {
     let down = true;
-    const h = buildHarness({ retry: false, outages: { outageFor: () => (down ? 'before' : null) } });
+    const h = await buildHarness({ retry: false, outages: { outageFor: () => (down ? 'before' : null) } });
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -136,7 +136,7 @@ describe('falha entre marcar como confirmado e efetivar', () => {
 
   it('escrita feita mas resposta perdida: a retentativa não duplica o chamado', async () => {
     let lose = true;
-    const h = buildHarness({ retry: false, outages: { outageFor: ({ method }) => (lose && method === 'create' ? 'after' : null) } });
+    const h = await buildHarness({ retry: false, outages: { outageFor: ({ method }) => (lose && method === 'create' ? 'after' : null) } });
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -151,7 +151,7 @@ describe('falha entre marcar como confirmado e efetivar', () => {
   });
 
   it('falha ao registrar o resultado depois de gravar: a retentativa reconcilia', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -171,7 +171,7 @@ describe('falha entre marcar como confirmado e efetivar', () => {
 
 describe('recusas de negócio devolvem o rascunho a PENDING', () => {
   it('duplicidade: 409 DUPLICATE_TICKET apontando o chamado existente', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const duplicate: TicketFields = {
       ...NEW_FIELDS,
@@ -193,7 +193,7 @@ describe('recusas de negócio devolvem o rascunho a PENDING', () => {
   });
 
   it('reabertura fora da janela: 422 REOPEN_WINDOW_EXPIRED', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, reopenPayload('INC-19980'));
     const res = await confirm(h, await h.login(ANA), draftId);
     expect(res.status).toBe(422);
@@ -202,7 +202,7 @@ describe('recusas de negócio devolvem o rascunho a PENDING', () => {
   });
 
   it('atualizar chamado resolvido: 409 CONFLICT', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, updatePayload('INC-20150', 'A senha bloqueou de novo agora.'));
     const res = await confirm(h, await h.login(ANA), draftId);
     expect(res.status).toBe(409);
@@ -212,7 +212,7 @@ describe('recusas de negócio devolvem o rascunho a PENDING', () => {
 
 describe('propriedade e privacidade', () => {
   it('outro funcionário não confirma nem descarta o rascunho: 404 e nada é escrito', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     const bruno = await h.login(BRUNO);
 
@@ -229,7 +229,7 @@ describe('propriedade e privacidade', () => {
   });
 
   it('rascunho de outro é indistinguível de rascunho inexistente', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     const bruno = await h.login(BRUNO);
     const foreign = await confirm(h, bruno, draftId, CONV_BRUNO);
@@ -238,13 +238,13 @@ describe('propriedade e privacidade', () => {
   });
 
   it('conversa errada na URL: 404', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     expect((await confirm(h, await h.login(ANA), draftId, 'conv_outra')).status).toBe(404);
   });
 
   it('employeeId enviado pelo cliente (corpo, query, cabeçalho) é ignorado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     const bruno = await h.login(BRUNO);
 
@@ -257,7 +257,7 @@ describe('propriedade e privacidade', () => {
   });
 
   it('o corpo da requisição não altera o que é gravado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     const res = await request(h.app)
       .post(confirmUrl(CONV_ANA, draftId))
@@ -268,14 +268,14 @@ describe('propriedade e privacidade', () => {
   });
 
   it('exige login', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = h.addDraft(ANA, createPayload());
     expect((await request(h.app).post(confirmUrl(CONV_ANA, draftId))).status).toBe(401);
     expect((await request(h.app).post(discardUrl(CONV_ANA, draftId))).status).toBe(401);
   });
 
   it('identificadores absurdos são rejeitados na validação', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const res = await confirm(h, await h.login(ANA), 'x'.repeat(200));
     expect(res.status).toBe(400);
     expect(errorOf(res).code).toBe('VALIDATION_ERROR');
@@ -284,7 +284,7 @@ describe('propriedade e privacidade', () => {
 
 describe('estado do rascunho', () => {
   it('rascunho descartado não pode mais ser confirmado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const draftId = h.addDraft(ANA, createPayload());
 
@@ -299,7 +299,7 @@ describe('estado do rascunho', () => {
   });
 
   it('descartar é idempotente, mas rascunho confirmado não pode ser descartado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     const toDiscard = h.addDraft(ANA, createPayload());
     expect((await request(h.app).post(discardUrl(CONV_ANA, toDiscard)).set(bearer(token))).status).toBe(200);
@@ -313,7 +313,7 @@ describe('estado do rascunho', () => {
   });
 
   it('conversa encerrada não aceita confirmação', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const draftId = 'drf_fechado';
     h.drafts.addDraft({
       id: draftId,
@@ -334,7 +334,7 @@ describe('estado do rascunho', () => {
 
 describe('não há escrita direta contornando a confirmação', () => {
   it('o serviço recusa escrever com rascunho PENDING, inexistente, alheio ou adulterado', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const pending = h.addDraft(ANA, createPayload());
     const foreign = h.addDraft(BRUNO, createPayload(), CONV_BRUNO, 'CONFIRMED');
     const command = (confirmedDraftId: string, fields: TicketFields = NEW_FIELDS) => ({
@@ -356,7 +356,7 @@ describe('não há escrita direta contornando a confirmação', () => {
   });
 
   it('não existe rota HTTP de escrita direta de chamados', async () => {
-    const h = buildHarness();
+    const h = await buildHarness();
     const token = await h.login(ANA);
     for (const [method, path] of [
       ['post', '/api/tickets'],

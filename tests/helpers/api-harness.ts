@@ -8,10 +8,14 @@ import {
   withRetry,
   withSimulatedOutages,
 } from '@nexo/ticket-service';
+import { type Server, createServer } from 'node:http';
 import type { Express } from 'express';
-import request from 'supertest';
-import { vi } from 'vitest';
+import { type HttpTarget, request } from './http.js';
+import { afterAll, afterEach, vi } from 'vitest';
 import { createAuthService } from '../../apps/api/src/auth/auth-service.js';
+import { createInMemoryConversationRepository } from '../../apps/api/src/conversations/conversation-repository.js';
+import { createConversationService } from '../../apps/api/src/conversations/conversation-service.js';
+import type { AgentResponder } from '../../apps/api/src/conversations/responder.js';
 import { createInMemoryUserRepository } from '../../apps/api/src/auth/user-repository.js';
 import { createDraftRepositoryGate } from '../../apps/api/src/drafts/draft-gate.js';
 import { createInMemoryDraftRepository } from '../../apps/api/src/drafts/draft-repository.js';
@@ -86,9 +90,11 @@ export interface HarnessOptions {
   /** Substitui o serviço de chamados (ex.: um que lança erro inesperado). */
   readonly ticketServiceOverride?: (real: TicketService) => TicketService;
   readonly sessionTtlSeconds?: number;
+  readonly responder?: AgentResponder;
+  readonly messageLimit?: number;
 }
 
-export function buildHarness(options: HarnessOptions = {}) {
+export async function buildHarness(options: HarnessOptions = {}) {
   const clock = { current: local('2026-11-02T10:00:00') };
   const now = () => clock.current;
 
@@ -101,22 +107,32 @@ export function buildHarness(options: HarnessOptions = {}) {
   if (options.retry !== false) tickets = withRetry(tickets, { sleep: () => Promise.resolve() });
   if (options.ticketServiceOverride) tickets = options.ticketServiceOverride(tickets);
 
+  const conversations = createInMemoryConversationRepository();
   const users = createInMemoryUserRepository(USERS);
   const auth = createAuthService({ users, secret: SECRET, sessionTtlSeconds: options.sessionTtlSeconds ?? 3600, now });
   const logger = { error: vi.fn() };
-  const app: Express = createApp({
+  const expressApp: Express = createApp({
     checkDatabase: async () => ({ status: 'up' }),
     version: 'test',
     startedAt: new Date(),
     logger,
-    api: { auth, tickets, drafts: createDraftService({ drafts, tickets, now }) },
+    api: {
+      auth,
+      tickets,
+      drafts: createDraftService({ drafts, tickets, now }),
+      conversations: createConversationService({ conversations, now, ...(options.messageLimit ? { messageLimit: options.messageLimit } : {}) }),
+      ...(options.responder ? { responder: options.responder } : {}),
+    },
   });
 
+  const app = await serve(expressApp);
   let counter = 0;
   return {
     app,
+    express: expressApp,
     clock,
     drafts,
+    conversations,
     logger,
     /** Serviço sem retry nem simulação de queda, para consultar o estado real. */
     realTickets,
@@ -143,6 +159,73 @@ export function buildHarness(options: HarnessOptions = {}) {
   };
 }
 
-export type Harness = ReturnType<typeof buildHarness>;
+/** Lê um corpo `text/event-stream` em eventos `{ event, data }`. */
+export function parseSse(text: string): Array<{ event: string; data: Record<string, unknown> }> {
+  return text
+    .split('\n\n')
+    .filter((block) => block.trim() !== '')
+    .map((block) => {
+      const lines = block.split('\n');
+      const event = lines.find((l) => l.startsWith('event: '))?.slice(7) ?? '';
+      const data = lines.find((l) => l.startsWith('data: '))?.slice(6) ?? '{}';
+      return { event, data: JSON.parse(data) as Record<string, unknown> };
+    });
+}
+
+/** Alvo aceito pelo cliente de teste (`helpers/http.ts`): URL, servidor escutando ou app. */
+export type RequestTarget = HttpTarget;
+
+/**
+ * Sobe UM servidor para uma rajada de requisições simultâneas. Com `request(app)`, cada chamada cria o
+ * seu próprio servidor; dezenas ao mesmo tempo derrubavam o worker do Vitest no Windows.
+ */
+export async function withServer<T>(app: Express | string, work: (server: RequestTarget) => Promise<T>): Promise<T> {
+  if (typeof app === 'string') return work(app); // já servido por `serve`
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    return await work(server);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+const servers = { test: new Set<Server>(), file: new Set<Server>() };
+
+async function closeAll(set: Set<Server>): Promise<void> {
+  const open = [...set];
+  set.clear();
+  await Promise.all(
+    open.map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections();
+          server.close(() => resolve());
+        }),
+    ),
+  );
+}
+
+afterEach(() => closeAll(servers.test));
+afterAll(() => closeAll(servers.file));
+
+/**
+ * Serve o app em UM servidor HTTP e devolve a URL base. `request(url)` reaproveita esse servidor; com
+ * `request(app)` o supertest sobe e derruba um servidor novo a cada chamada, e centenas deles por
+ * arquivo causavam abortos nativos intermitentes do worker do Vitest no Windows.
+ * `scope: 'test'` (padrão) fecha ao fim de cada teste; `'file'` fecha ao fim do arquivo.
+ */
+export async function serve(app: Express, scope: 'test' | 'file' = 'test'): Promise<string> {
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  server.unref();
+  servers[scope].add(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('servidor de teste não iniciou');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+export type Harness = Awaited<ReturnType<typeof buildHarness>>;
 
 export const bearer = (token: string) => ({ authorization: `Bearer ${token}` });

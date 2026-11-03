@@ -4,7 +4,7 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: P0.8 (homologação: validação no navegador real e avaliação do agente).**
+> **Status: pronto para a entrega.** Conferência contra o PRD, protótipos, CI, riscos e roteiro de demonstração: [docs/entrega.md](docs/entrega.md).
 >
 > | Implementado | Planejado |
 > | --- | --- |
@@ -128,7 +128,7 @@ rascunho, duplicidade, reabertura, baixa confiança, fora de escopo, falhas do p
 tempo máximo. A integração com PostgreSQL cobre publicação, confirmação, recuperação e transferência.
 Uma **matriz de 18 cenários** do PRD e do Anexo A (intenção, ferramenta, classificação, perguntas,
 confirmação, privacidade, encaminhamento e justificativa) roda sem custo com o modelo roteirizado e, com
-chave, com o modelo real (`npm run test:live`, verifica comportamento, não texto, com teto de tokens).
+chave, com o modelo real (os cenários marcados como reais no documento) (`npm run test:live`, verifica comportamento, não texto, com teto de tokens).
 O que cada execução prova e o que não prova: [docs/avaliacao-agente.md](docs/avaliacao-agente.md).
 
 ## Escolha do modelo
@@ -196,8 +196,46 @@ responder. Pelas rotas `/api/console/*`, um analista N1 ou N2:
 Toda ação informa a versão que o analista viu (`expectedVersion`) e roda com a conversa travada no
 banco; o agente também não publica se o estado da conversa mudou durante a execução. Os registros de
 transferência nunca são apagados. Regras, erros e limites: [docs/api-contracts.md](docs/api-contracts.md)
-e [docs/architecture.md](docs/architecture.md). Ainda não há interface do console: só a API.
+e [docs/architecture.md](docs/architecture.md). A interface do console está descrita em "A interface".
 
-## Ainda por escrever
+## Principais trade-offs
 
-Principais trade-offs e o que faria com mais tempo (próximas fases), além das telas.
+- **Regras em código, não só no prompt.** Duplicidade, janela de 7 dias, prioridade (impacto × urgência),
+  privacidade, transferência obrigatória e "nada se escreve sem confirmação" são código determinístico que
+  confere o que o modelo propõe. Ganho: o comportamento crítico não depende da sorte do LLM e é testável sem
+  custo. Preço: parte das regras existe duas vezes (instruções ao modelo e política) e o modelo é menos "livre".
+- **O agente só lê; a API escreve.** Rascunho e transferência são planejados pelo agente e gravados pela API,
+  numa transação, junto com a resposta, com a conversa travada e versão conferida. Ganho: uma resposta
+  duplicada ou velha nunca vira chamado nem transferência. Preço: mais código de publicação e retentativa.
+- **Resposta estruturada inteira, sem texto token a token.** O tempo real está nos *passos* do agente
+  (SSE). Ganho: decisão, confiança e blocos (cards, rascunho) chegam consistentes e validados. Preço: o texto
+  aparece de uma vez ao fim.
+- **Modelo pequeno e barato** (`claude-haiku-5-5`) com limites duros por resposta. Ganho: latência e custo
+  por conversa baixos. Preço: menos folga de raciocínio em casos ambíguos, que a política cobre transferindo
+  quando a confiança cai abaixo de 0,6.
+- **Concorrência no banco** (trava de linha por conversa e versão otimista) em vez de fila ou
+  lock distribuído. Ganho: correção entre processos com pouco código. Preço: eventos ao vivo para o
+  funcionário são por processo (a recuperação por banco cobre queda e reinício).
+- **Console por consulta periódica** (8 s): o contrato não tem stream para o analista. As ações aplicam na
+  hora; só a chegada de mensagens da funcionária pode levar alguns segundos.
+- **Sem edição do rascunho** (o protótipo tem "Editar"): corrige-se conversando e o rascunho novo substitui o
+  antigo. Menos interface, mais dependência da conversa.
+- **Dados de demonstração e login demonstrativo**, como o PRD pede; SLA em horas úteis de 8h às 18h, sem feriados.
+
+## O que faria com mais tempo
+
+- **Medir o julgamento do LLM de forma contínua:** relatório do `npm run test:live` versionado por modelo,
+  conjunto maior de cenários (conversas longas, mensagens ambíguas) e revisão humana das justificativas.
+- **Deploy** com limite de uso por usuário e teto de custo, e `test:e2e` no CI.
+- **Streaming do texto** da resposta e stream de eventos para o console (`LISTEN/NOTIFY` para várias instâncias).
+- **Edição do rascunho** na própria tela, nome e nível do analista nas mensagens, contadores e presença na fila.
+- **Busca semântica** na central de ajuda (embeddings) e resumo de conversas longas.
+- **Feriados** no cálculo de prazo e auditoria de acessibilidade com leitor de tela.
+
+## Limitações conhecidas
+
+- O julgamento do modelo real depende do provedor e varia entre execuções; os testes automáticos usam um
+  modelo roteirizado (provam a plataforma, não o LLM). Procedimento para medi-lo: [docs/avaliacao-agente.md](docs/avaliacao-agente.md).
+- Não há deploy; a execução é local (6 comandos acima).
+- Só Chromium (Chrome/Edge) foi usado na homologação do navegador.
+- No Windows, o Vitest às vezes perde um worker (`0xC0000409`) sem falha de asserção; no Linux (CI) é estável.

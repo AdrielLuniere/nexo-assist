@@ -93,7 +93,7 @@ instruções e as ferramentas vão em toda chamada (da ordem de 2 a 4 mil tokens
 (limite de 1.500 tokens por chamada). A conta é aproximada: `cenários × chamadas × (entrada + saída)`;
 com os 13 cenários, na casa de **100 a 150 mil tokens**, que é o teto padrão. Confira o preço por
 milhão de tokens do modelo escolhido na tabela do provedor antes de rodar; para um teste de fumaça,
-use `LIVE_ONLY=kb-duvida,privacidade,pedido-analista`.
+use `LIVE_ONLY=kb-duvida,privacidade,pedido-analista` (todos `live: true`).
 
 **Leitura do resultado.** O teste confere comportamento (intenção, ferramenta, rascunho, transferência,
 privacidade), não texto. Uma divergência não é necessariamente erro do produto: pode ser uma redação
@@ -101,8 +101,8 @@ diferente de intenção aceitável. Olhe a tabela, não só o verde ou vermelho.
 tabela no relatório da avaliação.
 
 **Roteiro manual complementar (com pessoa), na interface** (`npm run dev` com `AGENT_MODEL` e a chave
-no `.env`): repita pelo chat os cenários `kb-duvida`, `abrir-incidente`, `duplicidade`, `vencido-aceita` e
-`privacidade`, abra "Ver detalhes da decisão" em cada resposta e confira: o entendimento condiz com o que
+no `.env`): repita pelo chat os cenários `kb-duvida`, `abrir-incidente`, `vencido-aceita` e
+`privacidade` (`duplicidade` é `live: false`: teste-o só pela interface, sem a execução automatizada), abra "Ver detalhes da decisão" em cada resposta e confira: o entendimento condiz com o que
 você pediu, as ferramentas listadas são as que fazem sentido, a confiança é plausível e a justificativa
 cita a regra certa. Registre qualquer resposta em que a justificativa não explique a ação.
 

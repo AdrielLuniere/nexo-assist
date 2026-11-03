@@ -203,6 +203,11 @@ export function useChat(client: ApiClient, options: { retryDelays?: readonly num
     [client, runStream],
   );
 
+  // O aviso do pedido de analista só vale enquanto a conversa está com a equipe humana.
+  useEffect(() => {
+    if (detail?.status === 'WITH_AGENT' || detail?.status === 'CLOSED') setNotice(null);
+  }, [detail?.status]);
+
   // Retoma uma resposta pendente (ex.: o modelo falhou ou a página foi fechada no meio), uma vez por mensagem.
   useEffect(() => {
     const pending = detail?.pendingAgentResponse?.messageId;

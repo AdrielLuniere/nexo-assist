@@ -212,6 +212,26 @@ describe('chat do funcionário', () => {
     expect(screen.getAllByText('Olá Ana, sou do suporte.')).toHaveLength(1);
   });
 
+  it('o aviso verde do pedido de analista some quando a conversa volta ao agente (e nada do histórico se perde)', async () => {
+    const { user, h } = await startApp({ agentScript: [submit(proposal({ reply: 'Oi!' }))] });
+    await openChatAndSend(user, 'Oi');
+    await screen.findByText('Oi!');
+    await user.click(screen.getByRole('button', { name: /falar com um analista/i }));
+    expect(await screen.findByText(/um analista vai assumir esta conversa/)).toBeTruthy();
+
+    const marcos = apiAs(h, await h.login(MARCOS));
+    const id = (await marcos.get('/api/console/conversations')).body.items[0].id as string;
+    await marcos.post(`/api/console/conversations/${id}/assume`, { expectedVersion: 1 });
+    await screen.findByText('Com um analista');
+    expect(screen.queryByText(/um analista vai assumir esta conversa/)).toBeTruthy(); // ainda com a equipe: o aviso vale
+    await marcos.analystSays(id, 'Resolvido por aqui.');
+    await marcos.post(`/api/console/conversations/${id}/return`, { expectedVersion: 2 });
+
+    expect(await screen.findByText('Com o assistente')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/um analista vai assumir esta conversa/)).toBeNull());
+    expect(screen.getByText('Resolvido por aqui.')).toBeTruthy(); // histórico preservado
+  });
+
   it('reconexão: a conexão cai, o que chegou no meio aparece uma única vez', async () => {
     const { user, h } = await startApp({ agentScript: [submit(proposal({ reply: 'Oi!' }))], timings: { retryDelays: [400, 400] } });
     await openChatAndSend(user, 'Oi');

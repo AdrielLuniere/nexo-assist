@@ -11,6 +11,8 @@ import {
 import { type InMemoryWorld, appendInMemoryMessage, stripClientId } from '../conversations/conversation-repository.js';
 import type { InMemoryDraftRepository } from '../drafts/draft-repository.js';
 import { type ConversationRow, MESSAGE_INCLUDE, insertMessage, lockConversation, toContractDecision, toContractMessage } from '../conversations/message-writer.js';
+import { withCurrentDrafts } from '../conversations/draft-blocks.js';
+import { createPrismaDraftRepository } from '../drafts/draft-repository.js';
 import type { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { writeSlotsFor } from '../infra/write-slots.js';
 
@@ -88,6 +90,7 @@ async function findAnswer(tx: Tx | PrismaClient, triggerMessageId: string) {
 
 export function createPrismaAgentTurnStore(prisma: PrismaClient): AgentTurnStore {
   const slots = writeSlotsFor(prisma);
+  const drafts = createPrismaDraftRepository(prisma);
 
   return {
     async load(employeeId, conversationId, triggerMessageId, historyLimit) {
@@ -104,7 +107,8 @@ export function createPrismaAgentTurnStore(prisma: PrismaClient): AgentTurnStore
       return {
         status: conversation.status,
         version: conversation.version,
-        history: rows.reverse().map(toContractMessage),
+        // O histórico que o modelo lê traz o estado ATUAL dos rascunhos (confirmado, descartado...).
+        history: await withCurrentDrafts(rows.reverse().map(toContractMessage), drafts),
         answered: await findAnswer(prisma, triggerMessageId),
       };
     },
@@ -247,7 +251,7 @@ export function createInMemoryAgentTurnStore(world: InMemoryWorld, drafts: InMem
       return {
         status: conversation.status,
         version: conversation.version,
-        history: all.slice(Math.max(0, index + 1 - historyLimit), index + 1).map(stripClientId),
+        history: await withCurrentDrafts(all.slice(Math.max(0, index + 1 - historyLimit), index + 1).map(stripClientId), drafts),
         answered: answerOf(conversationId, triggerMessageId),
       };
     },

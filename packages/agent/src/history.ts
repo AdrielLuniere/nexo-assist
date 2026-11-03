@@ -20,6 +20,18 @@ const OPERATION_TEXT: Record<(typeof DRAFT_OPERATIONS)[number], string> = {
   REOPEN: 'reabertura',
 };
 
+/**
+ * Estado ATUAL do rascunho (a API o atualiza antes de montar o histórico). O modelo não pode deduzir isto
+ * das mensagens antigas: um rascunho já confirmado continua aparecendo como "mostrado para confirmação"
+ * em mensagens anteriores, e orientar a confirmá-lo de novo seria errado.
+ */
+const DRAFT_STATE_TEXT: Record<'PENDING' | 'CONFIRMED' | 'DISCARDED' | 'SUPERSEDED', (ticketCode: string | null) => string> = {
+  PENDING: () => 'AGUARDANDO confirmação do funcionário; nada foi criado ainda',
+  CONFIRMED: (code) => `JÁ CONFIRMADO${code ? `, chamado ${code} criado` : ''}; NÃO peça para confirmar de novo e não crie outro igual`,
+  DISCARDED: () => 'DESCARTADO pelo funcionário; nada foi criado',
+  SUPERSEDED: () => 'SUBSTITUÍDO por um rascunho mais novo; não vale mais',
+};
+
 function annotate(block: MessageBlock): string | null {
   switch (block.type) {
     case 'text':
@@ -29,9 +41,9 @@ function annotate(block: MessageBlock): string | null {
     case 'ticket_selection':
       return `[pediu para escolher entre: ${block.options.map((t) => t.code).join(', ')}]`;
     case 'draft': {
-      const { payload } = block.draft;
+      const { payload, status, resultTicketCode } = block.draft;
       const target = payload.operation === 'CREATE' ? payload.fields.title : payload.ticketCode;
-      return `[rascunho de ${OPERATION_TEXT[payload.operation]} (${target}) mostrado para confirmação]`;
+      return `[rascunho de ${OPERATION_TEXT[payload.operation]} (${target}): ${DRAFT_STATE_TEXT[status](resultTicketCode)}]`;
     }
     case 'quick_replies':
       return `[opções: ${block.options.map((o) => o.label).join(' | ')}]`;

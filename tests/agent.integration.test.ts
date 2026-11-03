@@ -223,6 +223,13 @@ describe('resposta do agente publicada', () => {
       resultTicketCode: confirmed.body.ticket.code,
       confirmedAt: expect.any(String),
     });
+
+    // O contexto que o AGENTE recebe na próxima resposta (o `load` real) também traz o estado atual:
+    // sem isso o modelo veria o retrato "pendente" e pediria para confirmar de novo um rascunho já confirmado.
+    const next = await prisma.message.create({ data: { conversationId: id, role: 'EMPLOYEE', authorId: 'usr_ana_souza', content: 'E agora?', clientMessageId: randomUUID() } });
+    const turn = await createPrismaAgentTurnStore(prisma).load('usr_ana_souza', id, next.id, 24);
+    const seen = turn?.history.flatMap((m) => m.blocks).find((b) => b.type === 'draft');
+    expect(seen?.type === 'draft' && seen.draft).toMatchObject({ id: draftId, status: 'CONFIRMED', resultTicketCode: confirmed.body.ticket.code });
   });
 
   it('um novo rascunho substitui o pendente anterior da conversa', async () => {

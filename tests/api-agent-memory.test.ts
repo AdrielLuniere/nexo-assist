@@ -43,6 +43,51 @@ async function chat(h: Harness, token: string, content: string, id?: string) {
 const detailOf = async (h: Harness, token: string, id: string) =>
   ConversationDetailSchema.parse((await request(h.app).get(`/api/conversations/${id}`).set(bearer(token))).body.conversation);
 
+describe('contexto do agente depois do atendimento humano', () => {
+  it('rascunho já confirmado chega ao modelo como confirmado e nada é pedido, criado ou duplicado depois da devolução', async () => {
+    const h = await buildHarness({
+      agentScript: [
+        ...DRAFT_SCRIPT,
+        submit(proposal({ intent: 'CHECK_TICKET_STATUS', action: 'REPLY', reply: 'Seu chamado já está aberto e com o analista.', understanding: 'Pergunta sobre o chamado já criado.', rationale: 'O rascunho já foi confirmado.' })),
+      ],
+    });
+    const ana = await h.login(ANA);
+    const marcos = await h.login(MARCOS);
+    const { conversationId } = await chat(h, ana, 'Meu mouse sem fio parou, mas uso o touchpad');
+    const block = (await detailOf(h, ana, conversationId)).messages.flatMap((m) => m.blocks).find((b) => b.type === 'draft');
+    if (block?.type !== 'draft') throw new Error('sem rascunho');
+    const confirmed = await request(h.app).post(`/api/conversations/${conversationId}/drafts/${block.draft.id}/confirm`).set(bearer(ana));
+    const code = confirmed.body.ticket.code as string;
+    const ticketsAfterConfirm = (await h.realTickets.listForRequester({ employeeId: ANA.id })).length;
+
+    // Transfere, o analista assume, responde e devolve (o histórico de transferência e mensagens permanece).
+    await request(h.app).post(`/api/conversations/${conversationId}/handoff`).set(bearer(ana)).send({});
+    const asAnalyst = (path: string, body: object) => request(h.app).post(`/api/console/conversations/${conversationId}/${path}`).set(bearer(marcos)).send(body);
+    await asAnalyst('assume', { expectedVersion: 1 });
+    await asAnalyst('messages', { content: 'Oi Ana, já cuidei disso.', clientMessageId: randomUUID() });
+    await asAnalyst('return', { expectedVersion: 2 });
+
+    const callsBefore = h.modelCalls.length;
+    await chat(h, ana, 'E agora, falta eu confirmar alguma coisa?', conversationId);
+
+    // O que o modelo recebeu: o estado real do rascunho, não o retrato PENDING antigo.
+    const prompt = JSON.stringify(h.modelCalls.at(callsBefore)?.prompt);
+    expect(prompt).toContain(`JÁ CONFIRMADO, chamado ${code} criado`);
+    expect(prompt).not.toContain('mostrado para confirmação');
+    expect(prompt).not.toContain('AGUARDANDO confirmação');
+    expect(prompt).toContain('[mensagem do analista] Oi Ana, já cuidei disso.');
+
+    // Sem alteração nem duplicação; histórico preservado.
+    expect((await h.realTickets.listForRequester({ employeeId: ANA.id })).length).toBe(ticketsAfterConfirm);
+    const detail = await detailOf(h, ana, conversationId);
+    expect(detail.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'draft')).toHaveLength(1);
+    expect(detail.messages.map((m) => m.role)).toContain('ANALYST');
+    expect(detail.messages.at(-1)?.content).toBe('Seu chamado já está aberto e com o analista.');
+    const handoffs = (await request(h.app).get(`/api/console/conversations/${conversationId}`).set(bearer(marcos))).body.conversation.handoffs as Array<{ status: string }>;
+    expect(handoffs.map((x) => x.status)).toEqual(['RETURNED_TO_AGENT']);
+  });
+});
+
 describe('agente real sobre o estado em memória', () => {
   it('resposta com passos em tempo real, mensagem e decisão persistidas e ligadas', async () => {
     const h = await buildHarness({

@@ -109,7 +109,7 @@ export function ChatPage({ chat, meId, onMenu }: { chat: ChatController; meId: s
 
       <footer className="border-t border-slate-200 bg-white px-4 py-3 md:px-6">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
-          {chat.notice ? <Banner tone="success">{chat.notice}</Banner> : null}
+          {chat.notice && (status === 'WAITING_ANALYST' || status === 'WITH_ANALYST') ? <Banner tone="success">{chat.notice}</Banner> : null}
           {status && PAUSED_TEXT[status] ? <Banner tone={status === 'CLOSED' ? 'info' : 'warning'}>{PAUSED_TEXT[status]}</Banner> : null}
           {chat.error ? (
             <Banner

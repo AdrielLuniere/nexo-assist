@@ -4,11 +4,11 @@ Agente de IA para o service desk de TI da Nexo (desafio técnico). O funcionári
 problema no chat; o agente consulta os chamados dele, busca na central de ajuda, prepara
 chamados para confirmação e chama um analista quando precisa.
 
-> **Status: pronto para a entrega.** Conferência contra o PRD, protótipos, CI, riscos e roteiro de demonstração: [docs/entrega.md](docs/entrega.md).
+> **Status: pronto para entrega, com demonstração online publicada.** O desafio ainda não foi enviado formalmente à empresa. Demonstração: **https://nexo.aggu.com.br/**. Conferência contra o PRD, protótipos, CI, riscos e roteiro de demonstração: [docs/entrega.md](docs/entrega.md).
 >
 > | Implementado | Planejado |
 > | --- | --- |
-> | Monorepo, contratos, fronteiras entre pacotes, `GET /health`, migrations e seed de exemplo | Deploy |
+> | Monorepo, contratos, fronteiras entre pacotes, `GET /health`, migrations e seed de exemplo | Limites de custo e uso por usuário (ver "O que faria com mais tempo") |
 > | Serviço de chamados (consultar, criar, atualizar, reabrir) com confirmação, duplicidade, prazos, isolamento, idempotência e retentativas | |
 > | Persistência em PostgreSQL de chamados, conversas, mensagens, decisões, rascunhos e transferências | |
 > | Login demonstrativo com sessão assinada e papéis (funcionário, analista N1/N2) | |
@@ -22,6 +22,23 @@ chamados para confirmação e chama um analista quando precisa.
 > | **Interface web** (React): login (Tela 1), chat com cards, seleção, rascunhos, respostas rápidas e pedido de analista (Telas 2 e 3), painel de decisões do agente, perfil e console do analista (Telas 4 e 5), responsiva | |
 >
 > A lista completa de rotas, implementadas e planejadas, está em [docs/api-contracts.md](docs/api-contracts.md).
+
+## Demonstração online
+
+Acesse **https://nexo.aggu.com.br/**. A aplicação está publicada em uma VPS Linux, com Nginx (HTTPS), a API
+Node.js como serviço do systemd, PostgreSQL e o modelo Claude da Anthropic. O agente responde de verdade.
+
+- **Proteção externa:** o acesso exige um usuário de avaliação, fornecido à parte. Depois da autenticação, um
+  cookie temporário vale por 8 horas. Depois desse prazo, basta autenticar-se novamente com as mesmas credenciais
+  externas; não é preciso solicitar uma nova conta.
+- **Login da aplicação:** use os usuários de exemplo com a senha informada junto com o acesso de avaliação
+  (o login da aplicação é demonstrativo):
+  - `ana.souza@nexo.com.br`: funcionária; abre o chat.
+  - `marcos.oliveira@nexo.com.br`: analista N1; abre o console de atendimento.
+- **Fluxos para testar:** dúvida pela central de ajuda, consulta de chamado com prazo vencido, abertura por
+  rascunho e confirmação, pedido de analista, e no console: assumir, responder, devolver e encerrar.
+
+Não publique as senhas nem o cookie.
 
 ## Como rodar
 
@@ -226,7 +243,9 @@ e [docs/architecture.md](docs/architecture.md). A interface do console está des
 
 - **Medir o julgamento do LLM de forma contínua:** relatório do `npm run test:live` versionado por modelo,
   conjunto maior de cenários (conversas longas, mensagens ambíguas) e revisão humana das justificativas.
-- **Deploy** com limite de uso por usuário e teto de custo, e `test:e2e` no CI.
+- **Limites de custo e uso:** hoje o agente tem limites por resposta (ver "Escolha do modelo"), mas ainda não há
+  limite de uso por usuário nem teto de gasto mensal com o provedor. Isso é pendente e deve vir antes de abrir o acesso
+  ao público. Também falta incluir o `test:e2e` no CI.
 - **Streaming do texto** da resposta e stream de eventos para o console (`LISTEN/NOTIFY` para várias instâncias).
 - **Edição do rascunho** na própria tela, nome e nível do analista nas mensagens, contadores e presença na fila.
 - **Busca semântica** na central de ajuda (embeddings) e resumo de conversas longas.
@@ -236,6 +255,6 @@ e [docs/architecture.md](docs/architecture.md). A interface do console está des
 
 - O julgamento do modelo real depende do provedor e varia entre execuções; os testes automáticos usam um
   modelo roteirizado (provam a plataforma, não o LLM). Procedimento para medi-lo: [docs/avaliacao-agente.md](docs/avaliacao-agente.md).
-- Não há deploy; a execução é local (6 comandos acima).
+- A demonstração online roda em uma única VPS, sem redundância; a execução local segue os 6 comandos acima.
 - Só Chromium (Chrome/Edge) foi usado na homologação do navegador.
 - No Windows, o Vitest às vezes perde um worker (`0xC0000409`) sem falha de asserção; no Linux (CI) é estável.

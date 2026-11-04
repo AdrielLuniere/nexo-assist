@@ -78,7 +78,7 @@ são **opcionais** e estão na seção 5, separadas dos requisitos.
 | --- | :-: | --- |
 | Repositório GitHub | ✅ | `AdrielLuniere/nexo-assist` |
 | README: como rodar, arquitetura, como o agente decide, qualidade, trade-offs, o que faria com mais tempo | ✅ | **corrigido nesta auditoria**: faltavam trade-offs e "o que faria com mais tempo" (a seção estava vazia) e havia uma frase desatualizada sobre o console |
-| Deploy (diferencial) | ⛔ | não realizado; "a ausência não penaliza". Se for feito: proteger a chave e limitar uso, e explicar no README |
+| Deploy (diferencial) | ✅ | demonstração publicada em **https://nexo.aggu.com.br/** (VPS Linux, Nginx HTTPS, API como serviço systemd, PostgreSQL, Claude da Anthropic). Acesso protegido por usuário de avaliação e cookie temporário de 8 h; após expirar, o avaliador reautentica-se com as mesmas credenciais. Procedimento e acesso no README ("Demonstração online") |
 
 ## 3. Consistência de estados (chamado × conversa × rascunho)
 
@@ -164,7 +164,8 @@ deve ser dita na apresentação.
 | Instabilidade do Vitest no Windows (`0xC0000409`, worker cai sem asserção falhando) | baixa | documentada com medição; o Linux (CI) é estável; sem causa conhecida |
 | `test:e2e` não roda no CI (exige navegador) | baixa | roda localmente; resultado informado acima |
 | Busca na central de ajuda por palavras (sem sinônimos/semântica); SLA sem feriados | baixa | decisões documentadas |
-| Deploy não feito | nenhuma (diferencial) | — |
+| Sem limite de uso por usuário nem teto de gasto mensal com o provedor (o agente tem limites por resposta) | média, pelo custo | pendente e registrado como próximo passo; a proteção de acesso mitiga o uso público |
+| Deploy em uma única VPS, sem redundância | baixa | aceitável para a avaliação |
 
 ## 7. Roteiro de demonstração (3 a 5 minutos)
 
@@ -190,11 +191,11 @@ console e o painel de decisões de conversas já gravadas, e o `npm run test:e2e
 
 ## 8. Veredito
 
-**Pronto para entrega.** Todos os requisitos obrigatórios do PRD estão implementados e com evidência
+**Pronto para entrega, com demonstração online publicada.** O desafio ainda não foi enviado formalmente à empresa. A demonstração está em https://nexo.aggu.com.br/. Todos os requisitos obrigatórios do PRD estão implementados e com evidência
 automatizada, o CI Linux do `df5b0ff` está verde, não há credenciais versionadas e a explicabilidade (o
 critério que o PRD chama de mais importante) está completa e persistida. As diferenças para os protótipos são
 conscientes e documentadas (seção 5). O único requisito classificado como parcial é o "tempo real" do chat
-(passos ao vivo, resposta inteira), e o diferencial de deploy não foi feito.
+(passos ao vivo, resposta inteira). O deploy está feito; o que segue pendente são os limites de custo e uso.
 
 **Condições antes de apresentar (não bloqueiam o envio do repositório):** (1) rodar um subconjunto do
 `test:live` com a chave real e guardar o relatório, porque o Claude real não foi retestado depois da

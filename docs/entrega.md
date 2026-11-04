@@ -9,7 +9,7 @@ Conferência do Nexo Assist contra o PRD v5, com a evidência de cada item. Esta
 | --- | --- | --- |
 | CI Linux do `df5b0ff` (run `41564698320`) | **verde**: typecheck, 30 arquivos / **435 testes**, build, **71** testes com PostgreSQL | `gh run view 41564698320` |
 | `test:e2e` (navegador real, H1–H12) | 22/22 após o `df5b0ff`, no Windows (informado pelo responsável pela entrega; o CI não o executa) | [homologacao.md](homologacao.md) |
-| Credenciais no repositório | **nenhuma** (arquivos versionados e histórico dos 9 commits) | varredura por padrões de chave; só `.env.example` é versionado e sem valores; `.env` está no `.gitignore` |
+| Credenciais no repositório | **nenhuma** (arquivos versionados e histórico dos 11 commits) | varredura por padrões de chave; só `.env.example` é versionado e sem valores; `.env` está no `.gitignore` |
 | Avaliação com **Claude real** | **não reproduzida nesta auditoria**: nenhum relatório de `test:live` está versionado. O responsável informa que o Claude real respondeu, preparou rascunho, justificou e consultou a base antes do `df5b0ff`; **não houve novo teste com Claude real depois da P0.8-D** | ver seção 4 |
 
 Aviso do CI (não é falha): `checkout@v4` e `setup-node@v4` usam Node 20, que o GitHub força para Node 24.
@@ -65,7 +65,7 @@ são **opcionais** e estão na seção 5, separadas dos requisitos.
 | Rodar localmente com poucos comandos; `.env.example` | ✅ | README "Demonstração em 6 comandos"; `npm run demo:check` (somente leitura); CI faz `npm ci` do zero |
 | Arquitetura clara, decisões justificadas | ✅ | [architecture.md](architecture.md); fronteiras testadas |
 | Testes onde fazem diferença; tratamento de erros | ✅ | 435 unitários/UI + 71 PostgreSQL + 22 E2E; erros estruturados com código (`ApiErrorBody`); recuperação de resposta pendente |
-| Commits que contam a história | 🟡 | 9 commits, um por fase (`feat:`/`test:`/`fix:`); legíveis, porém grossos |
+| Commits que contam a história | 🟡 | 11 commits, um por fase (`feat:`/`test:`/`fix:`); legíveis, porém grossos |
 | Eficiência e custo por conversa | ✅ | limites: 6 chamadas ao modelo, 8 ferramentas, 1.500 tokens de saída, 24 mensagens de histórico, 45 s; busca na central de ajuda sem tokens |
 | Chaves fora do código; privacidade entre funcionários | ✅ | nenhuma credencial versionada; portas do agente já vinculadas ao funcionário; testes `privacidade`, `injecao`, H11 |
 | Prioridade e prazos (Anexo A) | ✅ | `SLA_BY_PRIORITY`; `packages/ticket-service/src/sla.ts` (horas úteis, 8h–18h, sem feriados: decisão documentada) |
@@ -78,7 +78,7 @@ são **opcionais** e estão na seção 5, separadas dos requisitos.
 | --- | :-: | --- |
 | Repositório GitHub | ✅ | `AdrielLuniere/nexo-assist` |
 | README: como rodar, arquitetura, como o agente decide, qualidade, trade-offs, o que faria com mais tempo | ✅ | **corrigido nesta auditoria**: faltavam trade-offs e "o que faria com mais tempo" (a seção estava vazia) e havia uma frase desatualizada sobre o console |
-| Deploy (diferencial) | ✅ | demonstração publicada em **https://nexo.aggu.com.br/** (VPS Linux, Nginx HTTPS, API como serviço systemd, PostgreSQL, Claude da Anthropic). Acesso protegido por usuário de avaliação e cookie temporário de 8 h; após expirar, o avaliador reautentica-se com as mesmas credenciais. Procedimento e acesso no README ("Demonstração online") |
+| Deploy (diferencial) | ✅ | a implantação e seus componentes estão descritos no README ("Como foi feito o deploy"); os arquivos de Nginx/systemd e as credenciais não estão versionados. Demonstração publicada em **https://nexo.aggu.com.br/** (VPS Linux, Nginx HTTPS, API como serviço systemd, PostgreSQL, Claude da Anthropic). Acesso protegido por usuário de avaliação e cookie temporário de 8 h; após expirar, o avaliador reautentica-se com as mesmas credenciais. Procedimento e acesso no README ("Demonstração online") |
 
 ## 3. Consistência de estados (chamado × conversa × rascunho)
 
@@ -164,8 +164,23 @@ deve ser dita na apresentação.
 | Instabilidade do Vitest no Windows (`0xC0000409`, worker cai sem asserção falhando) | baixa | documentada com medição; o Linux (CI) é estável; sem causa conhecida |
 | `test:e2e` não roda no CI (exige navegador) | baixa | roda localmente; resultado informado acima |
 | Busca na central de ajuda por palavras (sem sinônimos/semântica); SLA sem feriados | baixa | decisões documentadas |
-| Sem limite de uso por usuário nem teto de gasto mensal com o provedor (o agente tem limites por resposta) | média, pelo custo | pendente e registrado como próximo passo; a proteção de acesso mitiga o uso público |
+| Sem limite de uso por usuário nem teto de gasto mensal com o provedor (o agente tem limites por resposta) | média, pelo custo | **P1 aberto** (ver "Achados P1"); a proteção de acesso externa mitiga o uso público, sem ser um controle de consumo da aplicação |
 | Deploy em uma única VPS, sem redundância | baixa | aceitável para a avaliação |
+
+### Achados P1 da auditoria final
+
+Duas pendências relevantes foram identificadas na auditoria pré-entrega. Ambas são registradas aqui de forma
+transparente:
+
+1. **Ausência de teto global e de limite por usuário para o custo da IA (aberto).** A aplicação não tem limite
+   de conversas novas por usuário, nem de mensagens por período, nem orçamento global de respostas. A única
+   contenção de vazão no código é a concorrência de 4 respostas simultâneas por processo. O controle de acesso
+   externo (usuário avaliador e cookie de 8 horas) reduz o risco de uso público, mas **não é uma limitação de
+   consumo da aplicação**, e não comprovo sua configuração a partir do repositório. Continua pendente.
+2. **Falta anterior de detalhamento do deploy (resolvido no README).** Antes, o README só citava VPS, Nginx,
+   systemd e PostgreSQL, sem procedimento. A seção "Como foi feito o deploy" do README descreve os fatos da
+   implantação. Mesmo assim, os arquivos de Nginx e systemd e as credenciais **não estão versionados**, portanto
+   o deploy não é reproduzível somente com o repositório.
 
 ## 7. Roteiro de demonstração (3 a 5 minutos)
 

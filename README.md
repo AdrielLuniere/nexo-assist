@@ -40,6 +40,25 @@ Node.js como serviço do systemd, PostgreSQL e o modelo Claude da Anthropic. O a
 
 Não publique as senhas nem o cookie.
 
+## Como foi feito o deploy
+
+A demonstração roda em uma VPS Linux. Os fatos abaixo descrevem a implantação feita; não são um roteiro
+que reproduz o ambiente só com este repositório.
+
+- **HTTPS:** Nginx na porta pública, com certificado Let's Encrypt.
+- **Frontend:** a aplicação React/Vite é compilada (`npm run build`) e servida pelo Nginx.
+- **API Node.js:** executada como serviço systemd, escutando somente em `127.0.0.1:3334`.
+- **Banco:** PostgreSQL local na própria VPS, acessível somente pela API.
+- **Autenticação externa:** um serviço auxiliar de demonstração escuta em `127.0.0.1:3335`. O acesso exige um
+  usuário avaliador; após a autenticação, um cookie assinado de 8 horas é validado nas rotas `/api/`, de forma
+  independente do Bearer interno da aplicação.
+- **Modelo:** o agente usa o modelo Claude da Anthropic, configurado por variáveis de ambiente do serviço.
+- **Migrations e seed:** aplicados na implantação. As instruções locais de `npm run db:migrate` e
+  `npm run db:seed` continuam válidas para outro ambiente.
+
+Os arquivos de configuração do Nginx e do systemd, e as credenciais de acesso, **não estão versionados** neste
+repositório. Não há senhas, tokens nem conteúdo de `.env` nesta documentação.
+
 ## Como rodar
 
 Pré-requisitos: Node.js 24 (`.nvmrc`; mínimo 22.13) e Docker.
